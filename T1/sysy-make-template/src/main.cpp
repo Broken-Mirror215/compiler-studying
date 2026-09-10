@@ -26,6 +26,18 @@ int main(int argc,const char* argv[]){
   auto ret=yyparse(ast);
   assert(!ret);
 
+
+  if (string(mode) != "-koopa" || string(argv[3]) != "-o") {
+      cerr << "用法: compiler -koopa 输入文件 -o 输出文件\n";
+      return 1;
+  }
+
+  // 后面的 cout 将写入 output 文件。
+  if (!freopen(output, "w", stdout)) {
+      perror("打开输出文件失败");
+      return 1;
+  }
+
   ast->Dump();
   cout << endl;
   return 0;
