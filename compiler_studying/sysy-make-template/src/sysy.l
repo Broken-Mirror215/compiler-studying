@@ -2,6 +2,8 @@
 %option nounput
 %option noinput
 
+%x COMMENT
+
 %{
 
 #include <cstdlib>
@@ -31,6 +33,10 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 
 {WhiteSpace}    { /* 忽略, 不做任何操作 */ }
 {LineComment}   { /* 忽略, 不做任何操作 */ }
+"/*"            {BEGIN(COMMENT);}
+<COMMENT>"*/"   {BEGIN(INITIAL);}
+<COMMENT>\n     {/* 忽略注释里的换行 */}
+<COMMENT>.      {/* 忽略注释里的其他字符*/}
 
 "int"           { return INT; } //这个是如果读到了int就会被token翻译成INT。
 "return"        { return RETURN; }

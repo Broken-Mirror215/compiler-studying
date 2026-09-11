@@ -12,6 +12,53 @@ using namespace std;
 extern FILE* yyin;
 extern int yyparse(unique_ptr<BaseAst>&ast);
 
+
+
+void GenRiscV(const koopa_raw_program_t &raw){
+  cout<<" .text\n";//告诉汇编器，这后面是属于代码段的
+  
+  assert(raw.funcs.kind==KOOPA_RSIK_FUNCTION);
+
+  for (size_t i=0;i<raw.funcs.len;i++){
+    auto func=reinterpret_cast<koopa_raw_function_t>(raw.funcs.buffer[i]);
+    //这是在找到程序里面的每一个函数...
+
+    string name=func->name;//我将得到@main
+    name=name.substr(1);//变成main
+    cout<<" .global "<< name<< "\n";//写一个.global name
+    cout<< name << ":\n";
+
+    //---根据这上面的打印内容，我给risc-v声明了函数符号与入口的标记。
+
+    //进入这个函数的基本块
+    assert(func->bbs.kind==KOOPA_RSIK_BASIC_BLOCK);
+    
+    for (size_t j=0;j<func->bbs.len;j++){
+      auto bb=reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[j]);
+      assert(bb->insts.kind==KOOPA_RSIK_VALUE);
+
+      //这个就是进入到基本块读取指令
+      for (size_t k=0; k <bb->insts.len;k++){
+        auto inst=reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[k]);
+
+        
+        assert(inst->kind.tag==KOOPA_RVT_RETURN);
+        //这段是拆开返回指令，拿到返回的整数。
+        auto ret_value=inst->kind.data.ret.value;
+        assert(ret_value);
+        assert(ret_value->kind.tag==KOOPA_RVT_INTEGER);
+
+        auto number = ret_value->kind.data.integer.value;
+        cout<<" li a0, "<< number << "\n";
+        cout<<" ret\n";
+      }
+    }
+  }
+}
+
+//也就是说这么长一串代码，只是为了拿return 后面的整数....
+
+
 int main(int argc,const char* argv[]){
 
 
@@ -29,7 +76,7 @@ int main(int argc,const char* argv[]){
   assert(!ret);
 
 
-  if (string(mode) != "-koopa" || string(argv[3]) != "-o") {
+  if (string(mode) != "-koopa"&& string(mode) != "-riscv" || string(argv[3]) != "-o") {
       cerr << "用法: compiler -koopa 输入文件 -o 输出文件\n";
       return 1;
   }
@@ -65,8 +112,6 @@ int main(int argc,const char* argv[]){
 
   //后续读取函数、基本块、指令的代码放在这里。
 
-  //必须要等raw使用完毕，才能放builder
-  koopa_delete_raw_program_builder(builder);
 
   //5.仍然用原来的koopa 输出功能
   if (!freopen(output,"w",stdout)){
@@ -74,8 +119,15 @@ int main(int argc,const char* argv[]){
     return 1;
   }
 
+  if (string(mode)=="-koopa"){
+    cout<<ir;
+  }
+  else
+  {
+    GenRiscV(raw);
+  }
 
-  cout<<ir;
+  koopa_delete_raw_program_builder(builder);
   return 0;
 
 }
