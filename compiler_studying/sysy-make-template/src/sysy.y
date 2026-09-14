@@ -35,15 +35,19 @@ using namespace std;
 
 }
 
-// lexer 返回的所有 token 种类的声明
+// lexer 返回的所有 token 种类的声明,终结符
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 %token INT RETURN
 %token <str_val> IDENT
 %token <int_val> INT_CONST
+%token LE GE EQ NE LAND LOR
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt  
-%type <int_val> Number
+//ds v4 flash 3.1
+%type <ast_val> FuncDef FuncType Block Stmt  Number 
+%type <ast_val>Exp PrimaryExp UnaryExp MulExp AddExp RelExp EqExp LAndExp LOrExp
+%type <int_val> UnaryOp MulOp AddOp
+
 
 %% 
 
@@ -78,7 +82,7 @@ FuncDef
     ast->ident=*unique_ptr<string>($2);
     ast->block=unique_ptr<BaseAst>($5);
     //下面这个呢？
-    $$ =ast; //666派生类赋值给了基类
+    $$ =ast; //派生类赋值给了基类
   }
   ;
 
@@ -98,18 +102,178 @@ Block
   ;
 
 Stmt
-  : RETURN Number ';' {
+  //在3.1的时候，如果Return后面返回的是一个表达式，那就会变成一棵树。所以需要指针
+  : RETURN Exp ';' {
     auto node=new StmtAst();
-    node->number=$2;
+    node->expr=unique_ptr<BaseAst>($2);
     $$=node;
   }
   ;
 
+
 Number
   : INT_CONST {
-    $$ = $1;
+    auto node=new NumberAst();
+    node->number=$1;
+    $$=node;
   }
   ;
+
+//ds v4 flash 3.1
+Exp
+: LOrExp{
+  $$=$1;//说是接优先级最低的...也是因为递归先处理。
+}
+;
+
+//ds v4 flash 3.1
+PrimaryExp
+:'(' Exp ')' {
+  $$=$2;
+}
+| Number{
+  $$=$1;
+}
+;
+
+//ds v4 flash 3.1
+UnaryExp
+:PrimaryExp {
+  $$=$1;
+}
+| UnaryOp UnaryExp{
+  auto node=new UnaryExpAst();
+  node->op=$1;
+  node->operand=unique_ptr<BaseAst>($2); 
+  $$=node;
+}
+;
+
+
+//ds v4 flash
+UnaryOp
+:'+' { $$='+';}
+|'-' {$$ ='-';}
+|'!' {$$= '!';}
+;
+
+AddExp
+:MulExp{
+  $$=$1;
+}
+| AddExp AddOp MulExp {
+  auto node = new BinaryExpAst();
+  node->op = string(1,static_cast<char>($2));
+  node->lhs=unique_ptr<BaseAst>($1);
+  node->rhs=unique_ptr<BaseAst>($3);
+  $$=node;
+}
+//这里有一个小坑,只能左递归，因为在c语言中"- "是左结合。
+
+MulExp
+:UnaryExp{
+  $$=$1;
+}
+| MulExp MulOp UnaryExp {
+  auto node=new BinaryExpAst();
+  node->op=string(1,static_cast<char>($2));
+  node->lhs=unique_ptr<BaseAst>($1);
+  node->rhs=unique_ptr<BaseAst>($3);
+  $$=node;
+}
+;
+
+AddOp
+:'+' {$$='+';}
+|'-' {$$='-';}
+;
+MulOp
+:'*' {$$='*';}
+|'/' {$$='/';}
+|'%' { $$='%';}
+;
+
+RelExp
+: AddExp {
+  $$ = $1;
+}
+| RelExp '<' AddExp {
+  auto node = new BinaryExpAst();
+  node->op = "<";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+| RelExp '>' AddExp {
+  auto node = new BinaryExpAst();
+  node->op = ">";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+| RelExp LE AddExp {
+  auto node = new BinaryExpAst();
+  node->op = "<=";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+| RelExp GE AddExp {
+  auto node = new BinaryExpAst();
+  node->op = ">=";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+;
+
+
+EqExp
+: RelExp {
+  $$ = $1;
+}
+| EqExp EQ RelExp {
+  auto node = new BinaryExpAst();
+  node->op = "==";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+| EqExp NE RelExp {
+  auto node = new BinaryExpAst();
+  node->op = "!=";
+  node->lhs = unique_ptr<BaseAst>($1);
+  node->rhs = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+;
+
+LAndExp
+:EqExp {
+  $$=$1;
+}
+|LAndExp LAND EqExp {
+  auto node =new BinaryExpAst();
+  node->op="&&";
+  node->lhs= unique_ptr<BaseAst>($1);
+  node->rhs= unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+;
+
+LOrExp 
+: LAndExp {
+  $$=$1;
+}
+| LOrExp LOR LAndExp {
+  auto node =new BinaryExpAst();
+  node->op="||";
+  node->lhs= unique_ptr<BaseAst>($1);
+  node->rhs= unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+;
+
 
 
 

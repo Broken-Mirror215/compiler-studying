@@ -40,6 +40,13 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 
 "int"           { return INT; } //这个是如果读到了int就会被token翻译成INT。
 "return"        { return RETURN; }
+"<="            {return LE;}
+">="            {return GE;}
+"=="             {return EQ;}
+"!="            {return NE;}
+"&&"            {return LAND;}
+"||"            {return LOR;}
+
 
 {Identifier}    { yylval.str_val = new string(yytext); return IDENT; }
 

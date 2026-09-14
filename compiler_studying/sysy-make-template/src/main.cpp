@@ -6,51 +6,143 @@
 #include "../AST/BaseAst.h"
 #include <sstream>
 #include "koopa.h"
+#include <unordered_map>
+#include <stdexcept>
 
 using namespace std;
 
 extern FILE* yyin;
 extern int yyparse(unique_ptr<BaseAst>&ast);
 
-
+void LoadValue(koopa_raw_value_t value,const string &reg,const unordered_map<koopa_raw_value_t,string> &value_regs){
+  if (value->kind.tag==KOOPA_RVT_INTEGER){
+    cout << " li "<< reg <<", " << value->kind.data.integer.value << "\n";
+  }
+  else
+  {
+    cout << " mv " << reg << ", " << value_regs.at(value) << "\n";
+  }
+}
 
 void GenRiscV(const koopa_raw_program_t &raw){
   cout<<" .text\n";//告诉汇编器，这后面是属于代码段的
   
   assert(raw.funcs.kind==KOOPA_RSIK_FUNCTION);
 
-  for (size_t i=0;i<raw.funcs.len;i++){
+  for (size_t i=0;i<raw.funcs.len;i++){ //这是在找到程序里面的每一个函数...
     auto func=reinterpret_cast<koopa_raw_function_t>(raw.funcs.buffer[i]);
-    //这是在找到程序里面的每一个函数...
+   
 
     string name=func->name;//我将得到@main
     name=name.substr(1);//变成main
     cout<<" .global "<< name<< "\n";//写一个.global name
     cout<< name << ":\n";
 
+    // 每个函数单独记录 Koopa 运算结果所在的寄存器。
+    unordered_map<koopa_raw_value_t, string> value_regs;
+    const string result_regs[]={"t2","t3","t4","t5","t6","a1","a2","a3","a4","a5","a6","a7"};
+    size_t next_reg=0;
+
     //---根据这上面的打印内容，我给risc-v声明了函数符号与入口的标记。
 
-    //进入这个函数的基本块
+    
     assert(func->bbs.kind==KOOPA_RSIK_BASIC_BLOCK);
     
-    for (size_t j=0;j<func->bbs.len;j++){
+    for (size_t j=0;j<func->bbs.len;j++){ //进入这个函数的基本块
       auto bb=reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[j]);
       assert(bb->insts.kind==KOOPA_RSIK_VALUE);
 
-      //这个就是进入到基本块读取指令
-      for (size_t k=0; k <bb->insts.len;k++){
+     
+      for (size_t k=0; k <bb->insts.len;k++){  //这个就是进入到基本块读取指令
         auto inst=reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[k]);
 
         
-        assert(inst->kind.tag==KOOPA_RVT_RETURN);
-        //这段是拆开返回指令，拿到返回的整数。
-        auto ret_value=inst->kind.data.ret.value;
-        assert(ret_value);
-        assert(ret_value->kind.tag==KOOPA_RVT_INTEGER);
+        switch (inst->kind.tag){
+          case KOOPA_RVT_BINARY :{
+            const auto & binary=inst->kind.data.binary;
+            const size_t reg_count=sizeof(result_regs)/sizeof(result_regs[0]);
 
-        auto number = ret_value->kind.data.integer.value;
-        cout<<" li a0, "<< number << "\n";
-        cout<<" ret\n";
+            if (next_reg>=reg_count){
+              throw runtime_error("临时寄存器不足！！！！");
+            }
+
+            string dest=result_regs[next_reg++];
+
+
+
+            // 从独立的结果寄存器或立即数加载两个操作数。
+            LoadValue(binary.rhs,"t1",value_regs);
+            LoadValue(binary.lhs,"t0",value_regs);
+
+            switch (binary.op)
+            {
+            case KOOPA_RBO_ADD:
+              cout<<" add " << dest <<" , t0, t1\n";
+              break;
+            case KOOPA_RBO_SUB:
+              cout<< " sub " << dest << ", t0, t1\n";
+              break;
+            case KOOPA_RBO_MUL:
+              cout<< " mul " << dest <<", t0, t1\n";
+              break;
+            case KOOPA_RBO_DIV:
+              cout << " div "<< dest <<", t0, t1\n";
+              break;
+            case KOOPA_RBO_MOD:
+              cout << " rem " << dest <<", t0, t1\n";
+              break;
+            case KOOPA_RBO_EQ:
+              cout<< " xor " << dest <<", t0, t1\n";
+              cout<<" seqz "<< dest << ", "<< dest << "\n";
+              break;
+            case KOOPA_RBO_NOT_EQ:
+              cout << " xor " << dest << ", t0, t1\n";
+              cout << " snez " << dest << ", " << dest << "\n";
+              break;
+            case KOOPA_RBO_LT:
+              cout << " slt " << dest << ", t0, t1\n";
+              break;
+            case KOOPA_RBO_GT:
+              cout << " slt " << dest << ", t1, t0\n";
+              break;
+            case KOOPA_RBO_LE:
+              // a <= b 等价于 !(b < a)。
+              cout << " slt " << dest << ", t1, t0\n";
+              cout << " seqz " << dest << ", " << dest << "\n";
+              break;
+            case KOOPA_RBO_GE:
+              // a >= b 等价于 !(a < b)。
+              cout << " slt " << dest << ", t0, t1\n";
+              cout << " seqz " << dest << ", " << dest << "\n";
+              break;
+            case KOOPA_RBO_AND:
+              cout << " and " << dest << ", t0, t1\n";
+              break;
+            case KOOPA_RBO_OR:
+              cout << " or " << dest << ", t0, t1\n";
+              break;
+            
+            default: 
+              cerr << "未支持这个二元运算\n";
+              return;
+            }
+            value_regs[inst]=dest;
+            break;
+          }
+
+          case KOOPA_RVT_RETURN : {
+            auto ret_value =inst->kind.data.ret.value;
+            assert(ret_value);
+
+            LoadValue(ret_value,"a0",value_regs);
+            cout << " ret\n";
+            break;
+          }
+
+          default:
+            cerr << "暂未支持这个指令类型\n";
+            return;
+        }
       }
     }
   }
