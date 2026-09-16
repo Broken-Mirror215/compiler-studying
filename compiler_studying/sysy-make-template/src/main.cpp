@@ -14,14 +14,90 @@ using namespace std;
 extern FILE* yyin;
 extern int yyparse(unique_ptr<BaseAst>&ast);
 
-void LoadValue(koopa_raw_value_t value,const string &reg,const unordered_map<koopa_raw_value_t,string> &value_regs){
-  if (value->kind.tag==KOOPA_RVT_INTEGER){
-    cout << " li "<< reg <<", " << value->kind.data.integer.value << "\n";
+struct StackFrame{
+  unordered_map<koopa_raw_value_t,int> offsets;
+  int size=0;
+};
+
+StackFrame BuildStackFrame(koopa_raw_function_t func) {
+  StackFrame frame;
+  int next_offset =0 ;
+
+  assert (func->bbs.kind == KOOPA_RSIK_BASIC_BLOCK);
+
+  for (size_t i=0;i<func->bbs.len;++i){
+    auto bb = reinterpret_cast<koopa_raw_basic_block_t> (func->bbs.buffer[i]);
+    
+    assert (bb->insts.kind==KOOPA_RSIK_VALUE);
+    for (size_t j = 0; j<bb->insts.len;++j){
+      auto inst = reinterpret_cast <koopa_raw_value_t>(bb->insts.buffer[j]);
+
+      if (inst->ty->tag==KOOPA_RTT_UNIT){
+        continue;
+      }
+
+      //当前阶段
+      //alloc i32 对应是4字节
+      //load ,binary 的i32结果也是4字节
+      frame.offsets.emplace(inst,next_offset);
+      next_offset+=4;
+    }
   }
-  else
+
+  frame.size = (next_offset+15)/16 *16;
+  return frame;
+  
+}
+
+void AdjustStack(int delta) {
+  if (delta==0){
+    return ;
+  }
+
+  if (delta >=-2048 &&delta<=2047) {
+    cout << " addi sp ,sp, " << delta << "\n";
+  }else {
+    cout<< " li t6, " << delta << "\n";
+    cout<< " add sp, sp, t6\n";
+  }
+}
+
+void LoadStack(const string & reg , int offset) {
+
+
+  assert(reg!="t6");
+
+  if (offset>=-2048&&offset<=2047) {
+    cout << " lw "<< reg << ", " << offset << "(sp)\n";
+  }else 
   {
-    cout << " mv " << reg << ", " << value_regs.at(value) << "\n";
+    cout<< " li t6, " <<offset << "\n";
+    cout<< " add t6, sp, t6\n";
+    cout<<" lw " << reg << ", 0(t6)\n";
   }
+}
+
+void StoreStack(const string & reg,int offset) {
+  assert (reg != "t6");
+
+  if (offset >=-2048 && offset <=2047) {
+    cout<< " sw " << reg << ", " << offset << "(sp)\n";
+  } else {
+    cout<< " li t6, " << offset << "\n";
+    cout << "add t6, sp, t6\n";
+    cout<< " sw " <<reg << ", 0(t6)\n";
+  }
+}
+
+//整数就用li 其他从栈读取
+void LoadValue(koopa_raw_value_t value,const string &reg,const StackFrame & frame){
+    if (value->kind.tag == KOOPA_RVT_INTEGER) {
+      cout << " li " << reg << ", " << value->kind.data.integer.value << "\n";
+    } else 
+    {
+      assert(value->ty->tag==KOOPA_RTT_INT32);
+      LoadStack(reg,frame.offsets.at(value));
+    }
 }
 
 void GenRiscV(const koopa_raw_program_t &raw){
@@ -31,17 +107,19 @@ void GenRiscV(const koopa_raw_program_t &raw){
 
   for (size_t i=0;i<raw.funcs.len;i++){ //这是在找到程序里面的每一个函数...
     auto func=reinterpret_cast<koopa_raw_function_t>(raw.funcs.buffer[i]);
-   
+    StackFrame frame = BuildStackFrame(func);
+    cerr << "函数 " << func->name << " 的栈帧大小：" << frame.size << " 字节\n";
 
     string name=func->name;//我将得到@main
     name=name.substr(1);//变成main
     cout<<" .global "<< name<< "\n";//写一个.global name
     cout<< name << ":\n";
+    AdjustStack(-frame.size); //每个函数都有一个自己的栈
 
-    // 每个函数单独记录 Koopa 运算结果所在的寄存器。
-    unordered_map<koopa_raw_value_t, string> value_regs;
-    const string result_regs[]={"t2","t3","t4","t5","t6","a1","a2","a3","a4","a5","a6","a7"};
-    size_t next_reg=0;
+    // // 每个函数单独记录 Koopa 运算结果所在的寄存器。
+    // unordered_map<koopa_raw_value_t, string> value_regs;  //这个是记录某个koopa运算放在哪个寄存器里面，比如这个%0 
+    // const string result_regs[]={"t2","t3","t4","t5","t6","a1","a2","a3","a4","a5","a6","a7"};
+    // size_t next_reg=0;
 
     //---根据这上面的打印内容，我给risc-v声明了函数符号与入口的标记。
 
@@ -54,25 +132,19 @@ void GenRiscV(const koopa_raw_program_t &raw){
 
      
       for (size_t k=0; k <bb->insts.len;k++){  //这个就是进入到基本块读取指令
+        //一条条koopa ir
         auto inst=reinterpret_cast<koopa_raw_value_t>(bb->insts.buffer[k]);
 
-        
+        //这是先判断哪种指令
         switch (inst->kind.tag){
           case KOOPA_RVT_BINARY :{
-            const auto & binary=inst->kind.data.binary;
-            const size_t reg_count=sizeof(result_regs)/sizeof(result_regs[0]);
-
-            if (next_reg>=reg_count){
-              throw runtime_error("临时寄存器不足！！！！");
-            }
-
-            string dest=result_regs[next_reg++];
-
-
-
+            const auto & binary=inst->kind.data.binary; //这个是二元运算的数据
+            
             // 从独立的结果寄存器或立即数加载两个操作数。
-            LoadValue(binary.rhs,"t1",value_regs);
-            LoadValue(binary.lhs,"t0",value_regs);
+            LoadValue(binary.lhs,"t0",frame);
+            LoadValue(binary.rhs,"t1",frame);
+            string dest ="t0";
+            
 
             switch (binary.op)
             {
@@ -126,29 +198,49 @@ void GenRiscV(const koopa_raw_program_t &raw){
               cerr << "未支持这个二元运算\n";
               return;
             }
-            value_regs[inst]=dest;
+            StoreStack(dest,frame.offsets.at(inst));//xxx.at是记录这个元素的在栈内的偏移量。
             break;
           }
 
           case KOOPA_RVT_RETURN : {
-            auto ret_value =inst->kind.data.ret.value;
+            auto ret_value =inst->kind.data.ret.value; //return 的数据
             assert(ret_value);
 
-            LoadValue(ret_value,"a0",value_regs);
+            LoadValue(ret_value,"a0",frame);
+            AdjustStack(frame.size);
             cout << " ret\n";
             break;
           }
+          case KOOPA_RVT_ALLOC :{
 
+            //buildStackFram为这个局部变量留好了空间
+            //函数入口统一成sp,此处不要生成指令
+            break;
+          }
+          case KOOPA_RVT_LOAD :{
+            const auto & load =inst->kind.data.load;
+            assert(load.src->kind.tag==KOOPA_RVT_ALLOC);
+            LoadStack("t0",frame.offsets.at(load.src));
+            StoreStack("t0",frame.offsets.at(inst));
+            break;
+          }
+          case KOOPA_RVT_STORE: {
+            const auto & store =inst->kind.data.store;
+            assert(store.dest->kind.tag ==KOOPA_RVT_ALLOC);
+            LoadValue(store.value,"t0",frame);
+            StoreStack("t0",frame.offsets.at(store.dest));
+            break;
+          }
           default:
             cerr << "暂未支持这个指令类型\n";
             return;
         }
       }
+      
     }
   }
 }
 
-//也就是说这么长一串代码，只是为了拿return 后面的整数....
 
 
 int main(int argc,const char* argv[]){
@@ -164,7 +256,7 @@ int main(int argc,const char* argv[]){
 
 
   unique_ptr<BaseAst> ast;
-  auto ret=yyparse(ast);
+  auto ret=yyparse(ast);//解析器按照我的bison语法去建树了。
   assert(!ret);
 
 
@@ -173,6 +265,7 @@ int main(int argc,const char* argv[]){
       return 1;
   }
 
+  
   //1.把dump 输出的koopa ir 收集到字符串流
   stringstream ir_stream;
   auto *old_buffer=cout.rdbuf(ir_stream.rdbuf());

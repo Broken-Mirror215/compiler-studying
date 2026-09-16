@@ -41,13 +41,17 @@ using namespace std;
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 %token LE GE EQ NE LAND LOR
+%token CONST
 
 // 非终结符的类型定义
 //ds v4 flash 3.1
 %type <ast_val> FuncDef FuncType Block Stmt  Number 
 %type <ast_val>Exp PrimaryExp UnaryExp MulExp AddExp RelExp EqExp LAndExp LOrExp
 %type <int_val> UnaryOp MulOp AddOp
-
+%type <ast_val> BlockStmtList BlockStmt
+%type <ast_val>ConstDecl ConstDefList ConstDef
+%type <ast_val>ConstInitVal ConstExp LVal
+%type <ast_val>VarDecl VarDefList VarDef InitVal
 
 %% 
 
@@ -61,7 +65,7 @@ CompUnit
   : FuncDef {
     auto comp_unit=make_unique<CompUnitAst>();
     comp_unit->FuncDef=unique_ptr<BaseAst>($1);
-    ast=move(comp_unit);
+    ast=move(comp_unit);//这是ast=comp_unit,然后在main里面的时候，库函数就解析了根。
   }
   ;
 
@@ -94,21 +98,50 @@ FuncType
   ;
 
 Block
-  : '{' Stmt '}' {
-    auto node =new BlockAst();
-    node->stmt=unique_ptr<BaseAst>($2);
-    $$=node;
+  : '{' BlockStmtList '}' {
+      $$=$2;
   }
   ;
 
+BlockStmtList
+:%empty{
+  $$=new BlockAst();
+}
+| BlockStmtList BlockStmt {
+  auto block =static_cast<BlockAst*>($1);
+  block->stmts.push_back(unique_ptr<BaseAst>($2));
+  $$=block;
+}
+
+BlockStmt
+:ConstDecl {
+  $$=$1;
+}
+|VarDecl {
+  $$=$1;
+}
+|Stmt {
+  $$=$1;
+}
+;
+
 Stmt
   //在3.1的时候，如果Return后面返回的是一个表达式，那就会变成一棵树。所以需要指针
-  : RETURN Exp ';' {
-    auto node=new StmtAst();
-    node->expr=unique_ptr<BaseAst>($2);
-    $$=node;
-  }
-  ;
+: RETURN Exp ';' {
+  auto node=new StmtAst();
+  node->expr=unique_ptr<BaseAst>($2);
+  $$=node;
+}
+| LVal '=' Exp ';' {
+  auto node = new AssignStmtAst();
+  unique_ptr<LValAst> lval (
+      static_cast<LValAst*> ($1)
+  );
+  node->ident = lval->ident;
+  node->expr = unique_ptr<BaseAst>($3);
+  $$ = node;
+}
+;
 
 
 Number
@@ -122,11 +155,11 @@ Number
 //ds v4 flash 3.1
 Exp
 : LOrExp{
-  $$=$1;//说是接优先级最低的...也是因为递归先处理。
+  $$=$1;
 }
 ;
 
-//ds v4 flash 3.1
+//ds v4 flash 3.1 他的意思就是基本表达式，是人为用括号包起来的部分
 PrimaryExp
 :'(' Exp ')' {
   $$=$2;
@@ -134,10 +167,13 @@ PrimaryExp
 | Number{
   $$=$1;
 }
+| LVal {
+  $$=$1;
+}
 ;
 
 //ds v4 flash 3.1
-UnaryExp
+UnaryExp //一元表达式喵 +a. -a,!a这些都是喵！
 :PrimaryExp {
   $$=$1;
 }
@@ -273,6 +309,95 @@ LOrExp
   $$ = node;
 }
 ;
+
+ConstDecl 
+:CONST INT ConstDefList ';' {
+  $$=$3;
+}
+;
+
+VarDecl 
+: INT VarDefList ';' {
+  $$=$2;
+}
+
+ConstDefList
+:ConstDef {
+  auto node =new ConstDeclAst();
+  node->defs.push_back(unique_ptr<BaseAst>($1));
+  $$=node;
+}
+| ConstDefList ',' ConstDef {
+  auto node=static_cast<ConstDeclAst*>($1);
+  node->defs.push_back(unique_ptr<BaseAst>($3));
+  $$=node;
+}
+;
+
+VarDefList 
+:VarDef {
+  auto node =new VarDeclAst();
+  node->defs.push_back(unique_ptr<BaseAst>($1));
+  $$=node;
+}
+| VarDefList ',' VarDef {
+  auto node = static_cast<VarDeclAst*>($1);
+  node->defs.push_back(unique_ptr<BaseAst>($3));
+  $$ = node;
+}
+;
+
+ConstDef 
+:IDENT '=' ConstInitVal {
+  auto node = new ConstDefAst();
+  unique_ptr<string> name($1);
+  node->ident =*name;
+  node->init=unique_ptr<BaseAst>($3);
+
+  $$=node;
+}
+
+VarDef
+:IDENT {
+  auto node =new VarDefAst();
+  unique_ptr<string> name ($1);
+  node->ident=*name;
+  $$=node;
+}
+| IDENT '=' InitVal {
+  auto node =new VarDefAst();
+  unique_ptr<string> name ($1);
+  node->ident=*name;
+  node->init=unique_ptr<BaseAst>($3);
+  $$=node;
+}
+;
+
+ConstInitVal
+:ConstExp {
+  $$=$1;
+}
+;
+
+InitVal
+:Exp {
+  $$=$1;
+}
+;
+
+ConstExp 
+:Exp{
+  $$=$1;
+}
+;
+
+LVal 
+:IDENT {  
+  auto node =new LValAst();
+  unique_ptr<string> name($1);
+  node->ident = *name;
+  $$ = node;
+}
 
 
 

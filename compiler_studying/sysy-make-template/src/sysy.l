@@ -39,6 +39,7 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 <COMMENT>.      {/* 忽略注释里的其他字符*/}
 
 "int"           { return INT; } //这个是如果读到了int就会被token翻译成INT。
+"const"         {return CONST;}
 "return"        { return RETURN; }
 "<="            {return LE;}
 ">="            {return GE;}
