@@ -100,6 +100,15 @@ void LoadValue(koopa_raw_value_t value,const string &reg,const StackFrame & fram
     }
 }
 
+string BlockLabel (const string & func_name,koopa_raw_basic_block_t bb) {
+  assert(bb->name);
+  
+  string bb_name = bb->name;
+  return ".L" + func_name + "_" + bb_name.substr(1);
+}
+
+
+
 void GenRiscV(const koopa_raw_program_t &raw){
   cout<<" .text\n";//告诉汇编器，这后面是属于代码段的
   
@@ -129,7 +138,7 @@ void GenRiscV(const koopa_raw_program_t &raw){
     for (size_t j=0;j<func->bbs.len;j++){ //进入这个函数的基本块
       auto bb=reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[j]);
       assert(bb->insts.kind==KOOPA_RSIK_VALUE);
-
+      cout << BlockLabel(name,bb) << ":\n";
      
       for (size_t k=0; k <bb->insts.len;k++){  //这个就是进入到基本块读取指令
         //一条条koopa ir
@@ -229,6 +238,20 @@ void GenRiscV(const koopa_raw_program_t &raw){
             assert(store.dest->kind.tag ==KOOPA_RVT_ALLOC);
             LoadValue(store.value,"t0",frame);
             StoreStack("t0",frame.offsets.at(store.dest));
+            break;
+          }
+          case KOOPA_RVT_BRANCH:{
+            const auto & branch = inst->kind.data.branch;
+
+            LoadValue(branch.cond,"t0",frame);
+            cout << " bnez t0, " << BlockLabel(name,branch.true_bb) << "\n";
+
+            cout << " j " << BlockLabel(name,branch.false_bb ) << "\n";
+            break;
+          }
+          case KOOPA_RVT_JUMP :{
+            const auto & jump =inst->kind.data.jump;
+            cout << " j " << BlockLabel(name,jump.target) << "\n";
             break;
           }
           default:

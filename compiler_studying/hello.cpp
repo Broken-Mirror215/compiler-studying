@@ -1,10 +1,18 @@
-
+#include <iostream>
+using namespace std;
 int main(){
-    //这是一个菠萝啃的注释
-
-    //法分析的作用, 是把字节流转换为单词流，词法分析器lexer会按照某种规则读取文件，并且把文件的内容变成token拆出。
-    //传给语法分析器parse
-    return 42;
+    
+    int a=1;
+    if (a==1)
+    {
+        cout<<"11111"<<endl;
+        if (a==2) {
+            cout<<2<<endl;
+        }
+        
+    }
+    else 
+        cout<< 4<< endl;
 }
 
 
