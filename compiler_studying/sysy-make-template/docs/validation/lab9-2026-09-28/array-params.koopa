@@ -1,0 +1,65 @@
+decl @getint(): i32
+decl @getch(): i32
+decl @getarray(*i32): i32
+decl @putint(i32)
+decl @putch(i32)
+decl @putarray(i32,*i32)
+decl @starttime()
+decl @stoptime()
+
+fun @elem(@a: *i32): i32 {
+%entry:
+ %var_a_0 = alloc *i32
+ store @a, %var_a_0
+ %0 = load %var_a_0
+ %1 = getptr %0, 1
+ %2 = load %1
+ ret %2
+}
+fun @row(@a: *[i32, 3]): i32 {
+%entry:
+ %var_a_1 = alloc *[i32, 3]
+ store @a, %var_a_1
+ %3 = load %var_a_1
+ %4 = getptr %3, 1
+ %5 = getelemptr %4, 0
+ %6 = call @elem(%5)
+ ret %6
+}
+fun @forward(@a: *[i32, 3]): i32 {
+%entry:
+ %var_a_2 = alloc *[i32, 3]
+ store @a, %var_a_2
+ %7 = load %var_a_2
+ %8 = call @row(%7)
+ ret %8
+}
+fun @main(): i32 {
+%entry:
+ %var_b_3 = alloc [[i32, 3], 2]
+ %9 = getelemptr %var_b_3, 0
+ %10 = getelemptr %9, 0
+ store 1, %10
+ %11 = getelemptr %var_b_3, 0
+ %12 = getelemptr %11, 1
+ store 2, %12
+ %13 = getelemptr %var_b_3, 0
+ %14 = getelemptr %13, 2
+ store 3, %14
+ %15 = getelemptr %var_b_3, 1
+ %16 = getelemptr %15, 0
+ store 4, %16
+ %17 = getelemptr %var_b_3, 1
+ %18 = getelemptr %17, 1
+ store 5, %18
+ %19 = getelemptr %var_b_3, 1
+ %20 = getelemptr %19, 2
+ store 6, %20
+ %21 = getelemptr %var_b_3, 0
+ %22 = call @forward(%21)
+ %23 = getelemptr %var_b_3, 0
+ %24 = getelemptr %23, 0
+ %25 = call @elem(%24)
+ %26 = add %22, %25
+ ret %26
+}

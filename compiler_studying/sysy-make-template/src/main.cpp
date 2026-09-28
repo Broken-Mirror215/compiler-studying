@@ -17,18 +17,94 @@ extern int yyparse(unique_ptr<BaseAst>&ast);
 struct StackFrame{
   unordered_map<koopa_raw_value_t,int> offsets;
   int size=0;
+
+  bool has_call = false;//是否调用其他函数
+  int outgoing_size = 0;//传递第九个以及之后实参的空间
+  int ra_offset = -1;//保存返回地址的位置，-1表示不需要
 };
 
+
+int TypeSize(koopa_raw_type_t ty) {
+  switch (ty->tag)
+  {
+  case KOOPA_RTT_INT32:
+  case KOOPA_RTT_POINTER:
+      return 4;
+  case KOOPA_RTT_ARRAY:
+      return static_cast<int> (ty->data.array.len) *TypeSize(ty->data.array.base);
+    
+  
+  default:
+    throw runtime_error("暂不支持的 koopa 类型");
+  }
+}
+void LoadStack(const string & reg ,int offset);
+void LoadAddress(koopa_raw_value_t value, const string & reg, const StackFrame & frame ) {
+    if (value->kind.tag == KOOPA_RVT_GLOBAL_ALLOC) {
+      cout << " la " << reg << ", " << (value->name+1) << "\n";
+    }
+    else if (value->kind.tag == KOOPA_RVT_ALLOC) {
+      int offset = frame.offsets.at(value);
+      if (offset >= -2048 && offset <= 2047) {
+        cout <<" addi " << reg << ", sp, " <<offset << "\n";
+      }
+      else 
+      {
+        cout << " li t6, " << offset << "\n";
+        cout << " add " << reg << ", sp ,t6\n";
+      }
+    }
+    else if (value->kind.tag == KOOPA_RVT_GET_ELEM_PTR ||
+            value->kind.tag == KOOPA_RVT_GET_PTR ||
+            value->kind.tag == KOOPA_RVT_LOAD) {
+      assert(value->ty->tag == KOOPA_RTT_POINTER);
+      LoadStack(reg,frame.offsets.at(value));
+
+    }
+    else 
+    {
+      throw runtime_error("暂不支持的地址来源");
+    }
+} 
 StackFrame BuildStackFrame(koopa_raw_function_t func) {
   StackFrame frame;
-  int next_offset =0 ;
 
   assert (func->bbs.kind == KOOPA_RSIK_BASIC_BLOCK);
 
+  //第一遍，统计调用需要的空间
+  for (size_t i=0;i<func->bbs.len;i++) {
+    auto bb =reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[i]);
+
+
+    assert (bb->insts.kind == KOOPA_RSIK_VALUE);
+
+    for (size_t j = 0; j < bb->insts.len;j++) {
+      auto inst =reinterpret_cast<koopa_raw_value_t> (bb->insts.buffer[j]);
+
+      if (inst->kind.tag==KOOPA_RVT_CALL) {
+        frame.has_call = true;
+        size_t count = inst->kind.data.call.args.len;
+
+        if (count > 8 ){
+            int bytes = static_cast<int>(count-8)*4;
+
+            if (bytes > frame.outgoing_size){
+              frame.outgoing_size = bytes;
+            }
+
+        }
+      }
+    }
+  }
+  int next_offset = frame.outgoing_size;
+  
+
+
+
+  //给局部变量和指令结果分配位置
   for (size_t i=0;i<func->bbs.len;++i){
     auto bb = reinterpret_cast<koopa_raw_basic_block_t> (func->bbs.buffer[i]);
     
-    assert (bb->insts.kind==KOOPA_RSIK_VALUE);
     for (size_t j = 0; j<bb->insts.len;++j){
       auto inst = reinterpret_cast <koopa_raw_value_t>(bb->insts.buffer[j]);
 
@@ -40,11 +116,16 @@ StackFrame BuildStackFrame(koopa_raw_function_t func) {
       //alloc i32 对应是4字节
       //load ,binary 的i32结果也是4字节
       frame.offsets.emplace(inst,next_offset);
-      next_offset+=4;
+      next_offset += inst->kind.tag==KOOPA_RVT_ALLOC ? TypeSize(inst->ty->data.pointer.base) : 4 ;
     }
   }
 
-  frame.size = (next_offset+15)/16 *16;
+  int ra_size = frame.has_call ? 4 : 0;
+
+  frame.size = (next_offset + ra_size+15)/16*16;
+  if (frame.has_call) {
+    frame.ra_offset = frame.size-4;
+  }
   return frame;
   
 }
@@ -93,9 +174,23 @@ void StoreStack(const string & reg,int offset) {
 void LoadValue(koopa_raw_value_t value,const string &reg,const StackFrame & frame){
     if (value->kind.tag == KOOPA_RVT_INTEGER) {
       cout << " li " << reg << ", " << value->kind.data.integer.value << "\n";
-    } else 
+    } 
+    else if (value->kind.tag==KOOPA_RVT_FUNC_ARG_REF) 
     {
-      assert(value->ty->tag==KOOPA_RTT_INT32);
+        size_t index=value->kind.data.func_arg_ref.index;
+        if (index<8) {
+        //前面放在a0~a7
+          cout << " mv " << reg << ", a" << index << "\n";
+        }
+        else 
+        {
+            int offset = frame.size + static_cast<int>(index-8) *4;
+            LoadStack(reg,offset);
+        } 
+    }
+    else 
+    {
+      assert(value->ty->tag == KOOPA_RTT_INT32 || value->ty->tag == KOOPA_RTT_POINTER);
       LoadStack(reg,frame.offsets.at(value));
     }
 }
@@ -109,13 +204,52 @@ string BlockLabel (const string & func_name,koopa_raw_basic_block_t bb) {
 
 
 
+void EmitGlobalInit(koopa_raw_value_t init) {
+  switch (init->kind.tag) {
+    case KOOPA_RVT_ZERO_INIT:
+      cout << " .zero " << TypeSize(init->ty) << "\n";
+      break;
+    case KOOPA_RVT_INTEGER:
+      cout << " .word " << init->kind.data.integer.value << "\n";
+      break;
+    case KOOPA_RVT_AGGREGATE: {
+      const auto &elems = init->kind.data.aggregate.elems;
+      assert(elems.kind == KOOPA_RSIK_VALUE);
+      for (size_t i = 0; i < elems.len; ++i) {
+        auto elem = reinterpret_cast<koopa_raw_value_t>(elems.buffer[i]);
+        EmitGlobalInit(elem);
+      }
+      break;
+    }
+    default:
+      throw runtime_error("暂不支持的全局变量初值");
+  }
+}
+
 void GenRiscV(const koopa_raw_program_t &raw){
+  //遍历全局分配
+  assert(raw.values.kind == KOOPA_RSIK_VALUE);
+  for (size_t i = 0; i<raw.values.len; ++i) {
+    auto value = reinterpret_cast<koopa_raw_value_t>(raw.values.buffer[i]);
+    assert(value->kind.tag == KOOPA_RVT_GLOBAL_ALLOC);
+
+    string name = value->name + 1;
+    auto init = value->kind.data.global_alloc.init;
+    cout << " .data\n";
+    cout << " .globl " << name << "\n";
+    cout << name << ":\n";
+
+    EmitGlobalInit(init);
+  }
   cout<<" .text\n";//告诉汇编器，这后面是属于代码段的
   
   assert(raw.funcs.kind==KOOPA_RSIK_FUNCTION);
 
   for (size_t i=0;i<raw.funcs.len;i++){ //这是在找到程序里面的每一个函数...
     auto func=reinterpret_cast<koopa_raw_function_t>(raw.funcs.buffer[i]);
+    if (func->bbs.len==0) {
+      continue;
+    }
     StackFrame frame = BuildStackFrame(func);
     cerr << "函数 " << func->name << " 的栈帧大小：" << frame.size << " 字节\n";
 
@@ -124,6 +258,9 @@ void GenRiscV(const koopa_raw_program_t &raw){
     cout<<" .global "<< name<< "\n";//写一个.global name
     cout<< name << ":\n";
     AdjustStack(-frame.size); //每个函数都有一个自己的栈
+    if (frame.has_call) {
+      StoreStack("ra",frame.ra_offset);
+    }
 
     // // 每个函数单独记录 Koopa 运算结果所在的寄存器。
     // unordered_map<koopa_raw_value_t, string> value_regs;  //这个是记录某个koopa运算放在哪个寄存器里面，比如这个%0 
@@ -210,12 +347,43 @@ void GenRiscV(const koopa_raw_program_t &raw){
             StoreStack(dest,frame.offsets.at(inst));//xxx.at是记录这个元素的在栈内的偏移量。
             break;
           }
+          case KOOPA_RVT_CALL : {
+            const auto & call= inst->kind.data.call;
+            assert(call.args.kind == KOOPA_RSIK_VALUE);
+
+            //把实参放到参数寄存器或者栈
+            for (size_t i = 0; i<call.args.len;i++) {
+              auto arg = reinterpret_cast<koopa_raw_value_t> ( call.args.buffer[i]);
+              
+              if (i < 8) {
+                LoadValue(arg,"a" + to_string(i),frame);
+              }
+              else {
+                LoadValue(arg,"t0", frame);
+                int offset = static_cast<int>(i-8)*4;
+                StoreStack("t0",offset);
+              }
+            }
+            
+            //调用目标函数，去掉koopa函数名开头的 @ 
+            string callee_name = call.callee->name;
+            cout << " call " << callee_name.substr(1) << "\n";
+
+            if (inst->ty->tag!=KOOPA_RTT_UNIT) {
+              StoreStack("a0", frame.offsets.at(inst));
+            }
+            break;
+          }
 
           case KOOPA_RVT_RETURN : {
             auto ret_value =inst->kind.data.ret.value; //return 的数据
-            assert(ret_value);
+            if (ret_value) {
+              LoadValue(ret_value,"a0",frame);
+            }
 
-            LoadValue(ret_value,"a0",frame);
+            if (frame.has_call) {
+              LoadStack("ra",frame.ra_offset);
+            }
             AdjustStack(frame.size);
             cout << " ret\n";
             break;
@@ -228,16 +396,16 @@ void GenRiscV(const koopa_raw_program_t &raw){
           }
           case KOOPA_RVT_LOAD :{
             const auto & load =inst->kind.data.load;
-            assert(load.src->kind.tag==KOOPA_RVT_ALLOC);
-            LoadStack("t0",frame.offsets.at(load.src));
+            LoadAddress(load.src,"t0",frame);
+            cout << " lw t0, 0(t0)\n";
             StoreStack("t0",frame.offsets.at(inst));
             break;
           }
           case KOOPA_RVT_STORE: {
             const auto & store =inst->kind.data.store;
-            assert(store.dest->kind.tag ==KOOPA_RVT_ALLOC);
             LoadValue(store.value,"t0",frame);
-            StoreStack("t0",frame.offsets.at(store.dest));
+            LoadAddress(store.dest,"t1",frame);
+            cout << " sw t0, 0(t1)\n";            
             break;
           }
           case KOOPA_RVT_BRANCH:{
@@ -252,6 +420,41 @@ void GenRiscV(const koopa_raw_program_t &raw){
           case KOOPA_RVT_JUMP :{
             const auto & jump =inst->kind.data.jump;
             cout << " j " << BlockLabel(name,jump.target) << "\n";
+            break;
+          }
+          case KOOPA_RVT_GET_ELEM_PTR :{
+            const auto & gep = inst->kind.data.get_elem_ptr;
+            auto array_ty = gep.src->ty->data.pointer.base;
+            assert(array_ty->tag == KOOPA_RTT_ARRAY);
+            LoadAddress(gep.src,"t0",frame);
+            LoadValue(gep.index,"t1",frame);
+            cout << " li t2, " << TypeSize(array_ty->data.array.base) << "\n";
+            cout << " mul t1, t1, t2\n";
+            cout << " add t0, t0, t1\n";
+            StoreStack("t0",frame.offsets.at(inst));
+            break;
+            
+          }
+          case KOOPA_RVT_GET_PTR :
+          {
+            const auto & gp = inst->kind.data.get_ptr;
+            assert(gp.src->ty->tag == KOOPA_RTT_POINTER);
+            auto pointee_ty =gp.src->ty->data.pointer.base;
+
+            //t0源指针
+            LoadAddress(gp.src,"t0",frame);
+
+            //t1下标
+            LoadValue(gp.index,"t1",frame);
+
+            //字节偏移 = 下标 x 指向对象大小
+            cout << " li t2, " << TypeSize(pointee_ty) << "\n";
+            cout << " mul t1, t1, t2\n";
+
+            //新地址 = 源地址 + 字节偏移
+            cout << " add t0, t0, t1\n";
+
+            StoreStack("t0",frame.offsets.at(inst));
             break;
           }
           default:

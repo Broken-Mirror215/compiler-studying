@@ -19,6 +19,13 @@ inline string NewVarAddr (const string & ident){
     return "%var_" + ident + "_" + to_string(cnt++);
 }
 
+inline string NewGlobalAddr (const string & ident){
+    static int cnt=0;
+    return "@global_" + ident + "_" + to_string(cnt++);
+}
+
+
+
 //基本块命名函数
 inline string NewLabel (const string & kind) {
     static int cnt=0;
@@ -27,7 +34,10 @@ inline string NewLabel (const string & kind) {
 
 enum class SymbolKind {
     Constant,
-    Variable
+    Variable,
+    Array,
+    ConstArray,
+    ArrayParam
 };
 
 
@@ -36,8 +46,36 @@ public:
     SymbolKind kind;
     int const_value = 0;//常量使用这个字段
     string addr; //变量使用这个字段 保存koopa存储位置的数字 例如 "@x"
+    size_t array_rank=0;//这个记录数组的维度
 };
 
+
+
+struct FuncInfo {
+    bool is_void;
+    size_t param_count;
+};
+
+inline unordered_map<string,FuncInfo>& FunctionTable() {
+    static unordered_map<string,FuncInfo> functions;
+    return functions;
+}
+
+inline void RegisterLibraryFunctions() {
+    auto & functions = FunctionTable();
+    functions.emplace("getint",FuncInfo{false,0});
+    functions.emplace("getch",FuncInfo{false,0});
+    functions.emplace("getarray",FuncInfo{false,1});
+    
+    functions.emplace("putint",FuncInfo{true,1});
+    functions.emplace("putch",FuncInfo{true,1});
+    functions.emplace("putarray",FuncInfo{true,2});
+
+    functions.emplace("starttime",FuncInfo{true,0});
+    functions.emplace("stoptime",FuncInfo{true,0});
+
+    
+}
 struct LoopInfo {
     string cond_label;
     string end_label;
@@ -51,13 +89,8 @@ inline vector<LoopInfo> & LoopStack() {
 }
 
 
-
-
-
-
-
 inline vector<unordered_map<string,SymbolInfo>> & ScopeStack() {
-    static vector<unordered_map<string,SymbolInfo>> scopes;
+    static vector<unordered_map<string,SymbolInfo>> scopes; //基本块里面的符号表
     return scopes;
 }
 
@@ -137,11 +170,29 @@ public:
     }
 };
 
+
+//lab 9.3  单个形参
+class FuncFParamAst : public BaseAst {
+public:
+    string ident;
+    bool is_array = false;
+
+    vector<unique_ptr<BaseAst>> array_dims;
+
+    string KoopaType() const;
+
+    void Dump() const override {}
+
+
+};
+
+
+
 //这是生成ir的入口。
 class CompUnitAst : public BaseAst{
 public:
     //一串函数
-    vector<unique_ptr<BaseAst>> funcs;
+    vector<unique_ptr<BaseAst>> items;
     // void Dump() const override {
     //     cout << "CompUnitAST { ";
     //     FuncDef->Dump();
@@ -152,8 +203,23 @@ public:
         //每次处理就清空一下符号表。
         ScopeStack().clear();
         LoopStack().clear();
-        for (auto & func : funcs)
-            func->Dump();
+        FunctionTable().clear();
+        RegisterLibraryFunctions();
+        EnterScope();//这就是全局的作用域
+
+        cout << "decl @getint(): i32\n";
+        cout << "decl @getch(): i32\n";
+        cout << "decl @getarray(*i32): i32\n";
+        cout << "decl @putint(i32)\n";
+        cout << "decl @putch(i32)\n";
+        cout << "decl @putarray(i32,*i32)\n";
+        cout << "decl @starttime()\n";
+        cout << "decl @stoptime()\n\n";
+
+        for (auto & item :items) {
+            item->Dump();
+        }
+        ExitScope();
     }
 };
 
@@ -163,7 +229,7 @@ public:
     string ident;
     unique_ptr<BaseAst> block;
     //存形参名字
-    vector<string> params;
+    vector<unique_ptr<FuncFParamAst>> params;
     // void Dump() const override {
     //     cout << "FuncDefAST { ";
     //     func_type->Dump();
@@ -173,18 +239,7 @@ public:
     // }
 
     //lab 8.1
-    void Dump() const override{
-        func_type->Dump(); //这一段为什么会有？
-        cout << "fun @" << ident << "(";
-        for (size_t i=0;i<params.size();i++) {
-            if (i>0) cout << ", ";
-            cout << "@" << params[i] << ": i32";
-        }
-        cout << ")" << func_type->result << " {\n";
-        cout<< "%entry:\n";
-        block->Dump();
-        cout << "}\n";
-    }
+    void Dump() const override;
 };
 
  class FuncTypeAst : public BaseAst {
@@ -241,7 +296,7 @@ public:
 //lab 8.1 形参列表的载体，自己不生成ir 由FuncDefAst取走里面生成的数字
 class FuncFParamsAst : public BaseAst {
 public:
-    vector<string> params;
+    vector<unique_ptr<FuncFParamAst>> params;
     void Dump() const override {}
 };
 //lab 8.1 实参列表的载体 由函数调用那条规则取走？
@@ -255,7 +310,47 @@ class FuncCallAst : public BaseAst {
 public:
     string ident;
     vector<unique_ptr<BaseAst>> args;
-    void Dump () const override {}
+    void Dump () const override {
+        //查找被调用函数
+        const auto& functions = FunctionTable();
+        auto it = functions.find(ident);
+        if (it == functions.end()) {
+            throw runtime_error ("调用了未定义的函数: " + ident);
+        }
+        const auto & info =it->second;
+
+        if (args.size()!=info.param_count) {
+            throw runtime_error("函数实参数量不匹配: " + ident);
+        }
+
+        //先生成所有实参的求值指令
+        vector<string>values;
+        for (const auto& arg: args) {
+            arg->Dump();
+
+            if (arg->result.empty()) {
+                throw runtime_error ("实参不能是 void 表达式: " + ident);
+            }
+
+            values.push_back(arg->result);
+        }
+
+        result.clear();
+
+        if (info.is_void) {
+            cout << " call @" << ident << "(";
+        } else {
+            result = NewTemp();
+            cout << " " << result << " = call @" <<ident << "(";
+        }
+
+        //输出已经求好的实参，结束调用指令
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) cout << ", ";
+            cout << values[i];
+        }
+        cout << ")\n";
+    }
 };
 
 class IfStmtAst : public BaseAst {
@@ -330,8 +425,15 @@ class BlockAst : public BaseAst {
     mutable bool terminater =false;
     vector<unique_ptr<BaseAst>> stmts;
 
+    //普通语句嵌套语句块：创建自己的作用域。
     void Dump() const override {
         EnterScope();
+        DumpInCurrentScope();
+        ExitScope();
+    }
+
+    //这里为了只处理块里面的语句，使用已经存在的作用域
+    void DumpInCurrentScope() const {
         terminater=false;
         for (auto & stmt:stmts){
             stmt->Dump();
@@ -341,7 +443,6 @@ class BlockAst : public BaseAst {
                 break;
              }
         }       
-        ExitScope();
     }
 
     bool IsTerminated () const override {
@@ -349,6 +450,68 @@ class BlockAst : public BaseAst {
     }
 };
 
+
+
+inline void FuncDefAst::Dump() const {
+    //开始生成一个程序时，重新建立函数的信息
+    auto * type = static_cast<FuncTypeAst*>(func_type.get());
+    auto& functions = FunctionTable();
+
+    if (functions.find(ident) != functions.end() || SymbolTable().count(ident)) {
+        throw runtime_error("函数重复定义： " + ident);  
+    }
+
+    functions.emplace(
+        ident,
+        FuncInfo({type->is_void,params.size()})  
+    );
+
+    func_type->Dump();
+    cout << "fun @" << ident << "(";
+
+    for (size_t i=0;i<params.size();i++){
+        if (i>0) cout << ", ";
+        cout << "@" << params[i]->ident << ": " << params[i]->KoopaType();
+    }
+    cout << ")" << func_type->result << " {\n";
+    cout << "%entry:\n";
+
+    //形参和函数体最外层用这个栈
+    EnterScope();
+
+    //然后把每个形参变成可读写的局部变量
+    for (const auto & param: params) {
+       const string & name = param->ident;
+       auto & table = SymbolTable();
+
+       if (table.find(name) != table.end()) {
+        throw runtime_error("形参重复定义: " + name);
+       }
+
+       string addr = NewVarAddr(name);
+       string param_type = param->KoopaType();
+
+       cout << " " << addr << " = alloc " << param_type << "\n";
+       cout << " store @" << name << ", " << addr << "\n";
+
+       SymbolKind kind = param->is_array ? SymbolKind::ArrayParam : SymbolKind::Variable;
+
+       size_t rank = param->is_array ? param->array_dims.size()+1 : 0;
+
+       table.emplace(name,SymbolInfo{kind,0,addr,rank});
+    }
+
+    //在刚才作用域生成函数体
+    auto * body = static_cast<BlockAst*>(block.get());
+    body->DumpInCurrentScope();
+
+    if (type->is_void&&!body->IsTerminated()) {
+        cout <<" ret\n";
+    }
+
+    ExitScope();
+    cout << "}\n";
+}
 
 class NumberAst : public BaseAst{
 public:
@@ -506,46 +669,346 @@ public:
     }
 };
 
+
+class ArrayDimsAst : public BaseAst {
+public:
+    vector<unique_ptr<BaseAst>> dims;
+
+    void Dump() const override {
+        throw logic_error ("维度列表由数组定义节点处理");
+    }
+};
+
+//把各个维度的常量表达式算长度
+inline vector<int> CalcArrayDims(const vector<unique_ptr<BaseAst>>& dims){
+
+    vector<int>lengths;
+    
+    for (const auto & dim : dims) {
+        int len = dim->Calc();
+        if (len<=0) {
+            throw runtime_error("数组长度必须大于0");
+        }
+        lengths.push_back(len);
+    }
+    return lengths;
+}
+
+//根据各维构造koopa数据类型
+inline string ArrayType (const vector<int>&lengths) {
+    string type = "i32";
+
+    for (auto it=lengths.rbegin();it!=lengths.rend();it++) {
+        type = "[" + type + ", " + to_string(*it) + "]";
+    }
+
+    return type;
+}
+
+inline string FuncFParamAst::KoopaType() const {
+    if (!is_array) {
+        return "i32";
+    }
+
+    auto lengths = CalcArrayDims(array_dims);
+    return "*" + ArrayType(lengths);
+}
+
+
+
+
 //名字引用节点，需要的时候就可以来查表
 class LValAst :public BaseAst{
 public:
+
     string ident;
+    //先算出左值地址，然后读取。
+    vector<unique_ptr<BaseAst>> indices;
+    string Address(bool for_write = false) const {
+        const auto &symbol = LookupSymbol(ident);
+    
+        if (indices.empty()&&symbol.kind==SymbolKind::Variable) {
+            return symbol.addr;
+        }
+
+
+        bool is_param = symbol.kind == SymbolKind::ArrayParam;
+
+        //有下标必须是普通数组、常量数组或数组参数
+        if (symbol.kind != SymbolKind::Array &&
+            symbol.kind != SymbolKind::ConstArray &&
+            !is_param) {
+            throw runtime_error ("不是数组: " + ident);
+        }
+        if (for_write && symbol.kind == SymbolKind::ConstArray) {
+            throw runtime_error("不能修改常量数组: " + ident);
+        }
+
+        if (indices.size() > symbol.array_rank) {
+            throw runtime_error("数组下标数量过多" + ident);
+        }
+
+        if (for_write&&indices.size() != symbol.array_rank) {
+            throw runtime_error("不能给整个数组或者子数组赋值： " + ident);
+        }
+
+
+
+        string addr =symbol.addr;
+
+        if (is_param ) {
+            string ptr = NewTemp();
+            cout << " " << ptr << " = load " << addr << "\n";
+            addr = ptr;
+        }
+        for (size_t i = 0; i< indices.size(); i ++) {
+            indices[i]->Dump();
+            string ptr = NewTemp();
+
+            string op =(is_param&&i==0) ? "getptr" : "getelemptr";
+            cout << " " << ptr << " = " << op << " " << addr << ", " << indices[i]->result << "\n";
+            addr = ptr;
+        }
+        return addr;
+    }
+
     int Calc() const override {
+        if (!indices.empty()) throw runtime_error("不能在常量表达式中求数组元素");
         return LookupConst(ident);
     }
 
     void Dump() const override {
         const auto &symbol=LookupSymbol(ident);
         //查表，查到了就用resuct字符串记录"7"
-        if (symbol.kind==SymbolKind::Constant){
+        if (indices.empty()&&symbol.kind==SymbolKind::Constant){
             result=to_string(symbol.const_value);
-        } else {
-            result=NewTemp();
-            cout << " " << result << " = load " << symbol.addr << "\n";
+            return ;
+        } 
+        string addr =Address();
+        
+        bool is_array = symbol.kind == SymbolKind::Array || symbol.kind == SymbolKind::ConstArray || symbol.kind== SymbolKind::ArrayParam;
+        
+        if (is_array&&indices.size() < symbol.array_rank) {
+            
+            if (symbol.kind== SymbolKind::ArrayParam&&indices.empty()) {
+                result = addr;
+                return ;
+            }
+
+            result = NewTemp();
+            cout << " " << result << " = getelemptr " << addr << ", 0\n";
+            return; 
         }
 
+        // 标量变量或完整数组元素：读取整数
+        result = NewTemp();
+        cout << " " << result << " = load " << addr << "\n";
     }
 };
 
 
+class ArrayInitAst : public BaseAst {
+public:
+    vector<unique_ptr<BaseAst>> elems;
+
+    void Dump() const override {
+        throw logic_error("数组初始化列表要由数组定义节点处理");
+    }
+};
+
+//depth当前列表初始化从哪一维开始的数组
+//start这个数组在展平结果中的起点
+//sizes[d] 是从d维开始的数组，共有多少个整数元素
+inline void FillArrayInit(const ArrayInitAst& list,size_t depth,size_t start,const vector<size_t>& sizes,vector<const BaseAst*>&flat) {
+
+
+    size_t pos = 0 ;
+    size_t capacity =sizes[depth];
+    size_t rank = sizes.size()-1;
+
+
+    for (const auto& elem:list.elems) {
+        if (pos>=capacity) {
+            throw runtime_error("数组初始值多于当前子数组容量");
+        }
+
+        auto*child = dynamic_cast<const ArrayInitAst*>(elem.get());
+        if (!child) {
+            //表达式占一个整数位置
+            flat[start+pos] = elem.get();
+            ++pos;
+            continue;
+        }
+
+        size_t child_depth = depth + 1;
+        while (child_depth < rank&& pos%sizes[child_depth] != 0) {
+            child_depth++;
+        }
+
+        if (child_depth == rank) {
+            throw runtime_error("嵌套初始化列表没有对齐数组边界");
+        }
+    
+        FillArrayInit(*child,child_depth,start+pos,sizes,flat);
+
+        pos+=sizes[child_depth];
+    
+    }
+}
+
+inline vector<const BaseAst*> FlattenArrayInit(const BaseAst&init,const vector<int>& lengths) {
+    auto * list =dynamic_cast<const ArrayInitAst*>(&init);
+    if (!list) {
+        throw runtime_error("数组要初始化列表");
+    }
+
+    if (lengths.empty()) {
+        throw logic_error("整理数组初值的时候没有数组维度");
+    }
+
+    vector<size_t> sizes(lengths.size()+1,1);
+
+    for (size_t d =lengths.size();d>0;d--) {
+        sizes[d-1] = static_cast<size_t>(lengths[d-1]*sizes[d]);
+    }
+
+    vector<const BaseAst*> flat(sizes[0],nullptr);
+    FillArrayInit(*list,0,0,sizes,flat);
+    return flat;
+}
+
+
+inline void EmitArrayAggregate(const vector<int>&values,const vector<int>& lengths,size_t depth,size_t & pos) {
+    if (depth == lengths.size()) {
+        cout << values[pos++];
+        return;
+    }
+
+    cout << "{";
+    for (int i=0;i <lengths[depth];i++){
+        if (i > 0) cout << ", ";
+        EmitArrayAggregate(values,lengths,depth+1,pos);
+    }
+    cout <<"}";
+}
+
+inline string ArrayElementAddress(const string&base,const vector<int>&lengths,size_t offset) {
+
+    size_t stride =1;
+    for (int len:lengths) {
+        stride *=static_cast<size_t>(len);
+    }
+    string addr =base;
+    for (int len: lengths) {
+
+        stride /=static_cast<size_t>(len);
+        size_t index = offset / stride;
+        offset  %= stride;
+        string ptr = NewTemp();
+        cout << " " << ptr << " = getelemptr " << addr << ", " << index << "\n";
+        addr = ptr;
+    }
+
+    return addr;
+
+}
 //一个常量定义 a = 1 + 2 这样子
 class ConstDefAst : public BaseAst{
 public:
     string ident;
     unique_ptr<BaseAst> init;
+    vector<unique_ptr<BaseAst>> array_dims;//不就一个长度吗怎么还要节点,你为二维数组服务的吗？
 
     void Dump() const override {
         auto & table = SymbolTable();
 
-        if (table.find(ident)!=table.end()){
+        if (table.find(ident)!=table.end() ||
+            (ScopeStack().size() == 1 && FunctionTable().count(ident))){
             throw runtime_error("常量重复定义: "+ ident);
         }
 
-        int value = init->Calc();//因为多态，这里用的二员运算的calc
-        table.emplace(
-            ident,
-            SymbolInfo{SymbolKind::Constant,value,""}//这是c++17的语法，聚合初始化
-        );
+        if (array_dims.empty()) {
+           int value = init->Calc();//因为多态，这里用的二员运算的calc
+                table.emplace(
+                ident,
+                SymbolInfo{SymbolKind::Constant,value,""}//这是c++17的语法，聚合初始化
+            );
+            return;
+        }
+
+
+        auto lengths =CalcArrayDims(array_dims);
+        string type =ArrayType(lengths);
+        auto flat =FlattenArrayInit(*init,lengths);
+
+        vector<int> values(flat.size(),0);
+        for (size_t i = 0 ; i<flat.size();i++) {
+            if (flat[i]) {
+                values[i] = flat[i]->Calc();
+            }
+        }
+
+        if (ScopeStack().size()==1) {
+            string addr =NewGlobalAddr(ident);
+            cout << "global " << addr <<" = alloc " << type << ", ";
+            size_t pos =0;
+            EmitArrayAggregate(values,lengths,0,pos);
+            cout << "\n";
+
+            table.emplace(ident,SymbolInfo{SymbolKind::ConstArray,0,addr,lengths.size()});
+            return ;
+        }
+
+        string addr = NewVarAddr(ident);
+        cout << " " << addr << " = alloc " << type << "\n";
+        table.emplace(ident,SymbolInfo{SymbolKind::ConstArray,0,addr,lengths.size()});
+
+
+        for (size_t i = 0; i<values.size();i++) {
+            string ptr =ArrayElementAddress(addr,lengths,i);
+            cout << " store " << values[i] << ", " << ptr << "\n";
+        }
+
+
+
+        // if (array_dims.size() >1) {
+        //     throw runtime_error("多维数组常量初始化将在下一步实现");
+        // }
+        // auto lengths = CalcArrayDims(array_dims);
+        // int len=lengths[0];
+
+        // auto * list = dynamic_cast<ArrayInitAst*>(init.get());
+        // if (!list) throw runtime_error ("常量数组要初始化列表");
+        // if (list->elems.size()> static_cast<size_t>(len)) {
+        //     throw runtime_error ("数组初始值多于数组长度");
+        // }
+
+        // vector<int>values(len,0);
+        // for (size_t i=0; i <list->elems.size();i++) {
+        //     values[i] = list->elems[i]->Calc();
+        // }
+
+        // if (ScopeStack().size()==1) {
+        //     string addr =NewGlobalAddr(ident);
+        //     cout << "global " << addr << " = alloc [i32, " << len << "], {";
+        //     for (int i=0;i< len;i ++) {
+        //         if (i) cout << ",";
+        //         cout <<values[i];
+        //     }
+        //     cout << "}\n";
+        //     table.emplace(ident,SymbolInfo{SymbolKind::ConstArray,0,addr,array_dims.size()});
+        //     return;
+        // }
+
+        // string addr = NewVarAddr(ident);
+        // cout << " " << addr << " = alloc [i32, " << len <<"]\n";
+        // table.emplace(ident,SymbolInfo{SymbolKind::ConstArray,0,addr,array_dims.size()});
+
+        // for (int i= 0;i <len;i++) {
+        //     string ptr = NewTemp();
+        //     cout << " " << ptr << " = getelemptr " << addr << ", " << i << "\n";
+        //     cout << " store " << values[i] << ", " << ptr << "\n";
+        // }
     }
 };
 
@@ -562,18 +1025,138 @@ public:
 
 };
 
-
 //一个变量定义
 class VarDefAst : public BaseAst{
 public:
     string ident;
     unique_ptr<BaseAst> init;
+    vector<unique_ptr<BaseAst>> array_dims;
     void Dump() const override {
         auto &table =SymbolTable();
-    
-        if (table.find(ident)!=table.end()){
-            throw runtime_error("标识符重复定义: " + ident);
+        if (table.count(ident) || (ScopeStack().size()==1 && FunctionTable().count(ident))) {
+            throw runtime_error("标识符重定义: " + ident);
         }
+
+        if (!array_dims.empty()) {
+            auto lengths = CalcArrayDims(array_dims);
+            string type =ArrayType(lengths);
+
+            vector<const BaseAst*> flat;
+           
+            if (init) {
+                flat = FlattenArrayInit(*init,lengths);
+            }
+
+            vector<int>values(flat.size(),0);
+            if (ScopeStack().size() == 1 ) {
+               
+                for (size_t i = 0; i< flat.size();i++) {
+                    if (flat[i]) {
+                        values[i] = flat[i]->Calc();
+                    }
+                }
+
+                string addr =NewGlobalAddr(ident);
+                cout << "global " << addr << " = alloc " <<type << ", ";
+
+                if (!init) {
+                    cout << "zeroinit";
+                }
+                else
+                {
+                    size_t pos = 0;
+                    EmitArrayAggregate(values,lengths,0,pos);
+                }
+                cout << "\n";
+                table.emplace(ident,SymbolInfo{SymbolKind::Array,0,addr,lengths.size()});
+                return;
+            }
+            string addr = NewVarAddr(ident);
+            cout << " " << addr << " = alloc " <<type << "\n";
+            table.emplace(ident,SymbolInfo{SymbolKind::Array,0,addr,lengths.size()});
+
+            if (init) {
+                for (size_t i= 0 ;i<flat.size();i++) {
+                    string value = "0";
+
+                    if (flat[i]) {
+                        flat[i]->Dump();
+                        value = flat[i]->result;
+                    }
+                    string ptr = ArrayElementAddress(addr,lengths,i);
+                    cout << " store " << value << ", " << ptr << "\n";
+                }
+                
+            }
+            return ;
+        }
+      
+
+
+
+
+
+        // if (!array_dims.empty()) {
+        //     auto lengths = CalcArrayDims(array_dims);
+        //     string type = ArrayType(lengths);
+
+        //     if (lengths.size() > 1 && init ) {
+        //         throw runtime_error ( "多维数组初始化将在下一步实现");
+        //     }
+
+        //     int len =lengths[0];
+        //     auto *list = init ? dynamic_cast<ArrayInitAst*>(init.get()) : nullptr;
+        //     if (init && !list) throw runtime_error("数组要初始化列表");
+        //     if (list && list->elems.size() > static_cast<size_t>(len))
+        //         throw runtime_error("数组初始值多于数组长度");
+
+        //     if (ScopeStack().size() == 1) {
+        //         string addr = NewGlobalAddr(ident);
+        //         cout << "global " << addr << " = alloc " << type << ", ";
+        //         if (!list) {
+        //             cout << "zeroinit\n";
+        //         } else {
+        //             cout << "{";
+        //             for (int i = 0; i < len; ++i) {
+        //                 if (i > 0) cout << ", ";
+        //                 int value = static_cast<size_t>(i) < list->elems.size()
+        //                     ? list->elems[i]->Calc() : 0;
+        //                 cout << value;
+        //             }
+        //             cout << "}\n";
+        //         }
+        //         table.emplace(ident, SymbolInfo{SymbolKind::Array, 0, addr,array_dims.size()});
+        //         return;
+        //     }
+
+        //     // 局部数组使用 alloc，初始化时逐元素计算地址并存储。
+        //     string addr = NewVarAddr(ident);
+        //     cout << " " << addr << " = alloc " << type << "\n";
+        //     table.emplace(ident, SymbolInfo{SymbolKind::Array, 0, addr,array_dims.size()});
+        //     if (list) {
+        //         for (int i = 0; i < len; ++i) {
+        //             string value = "0";
+        //             if (static_cast<size_t>(i) < list->elems.size()) {
+        //                 list->elems[i]->Dump();
+        //                 value = list->elems[i]->result;
+        //             }
+        //             string ptr = NewTemp();
+        //             cout << " " << ptr << " = getelemptr " << addr << ", " << i << "\n";
+        //             cout << " store " << value << ", " << ptr << "\n";
+        //         }
+        //     }
+        //     return;
+        // }
+
+        if (ScopeStack().size() == 1) {
+            string addr = NewGlobalAddr(ident);
+            int value = init ? init->Calc() : 0;
+            cout << "global " << addr << " = alloc i32, "
+                 << (init ? to_string(value) : "zeroinit") << "\n";
+            table.emplace(ident, SymbolInfo{SymbolKind::Variable, 0, addr});
+            return;
+        }
+
         //变量要先搓出ir表
         string addr = NewVarAddr(ident);//两个作用域同名的a 可以变成var a0 a1这样子。
         cout<< " " << addr << " = alloc i32\n";
@@ -606,18 +1189,13 @@ public:
 
 class AssignStmtAst : public BaseAst {
 public:
-    string ident;
+    unique_ptr<LValAst> target;
     unique_ptr<BaseAst> expr;
 
     void Dump() const override {
-        const auto & symbol=LookupSymbol(ident);
-
-        if (symbol.kind != SymbolKind::Variable) {
-            throw runtime_error ("不能给常量复制 : " + ident);
-        }
-
+        string addr =target->Address(true);
         expr->Dump();
-        cout<< " store " <<expr->result << ", " << symbol.addr << "\n";
+        cout << " store " <<expr->result << ", " <<addr << "\n";
     }
 };
 

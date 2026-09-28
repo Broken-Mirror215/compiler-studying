@@ -1,0 +1,1 @@
+const int n=4; int blank[n]; int partial[n]={5}; int empty[2]={}; const int zeros[n]={}, full[n]={1,2,3,4}; int seed(){return 7;} int main(){const int a[4]={2,3}, z[2]={}; int v[4]={seed(),a[0]}; blank[2]=9; partial[3]=v[1];return blank[2]+partial[0]+partial[3]+empty[1]+zeros[3]+full[3]+a[1]+a[3]+z[0]+v[0]+v[3];}

@@ -1,0 +1,72 @@
+run test in "-riscv" mode
+working directory: /tmp/tmpslth5cdi
+make: Entering directory '/workspace/compiler_studying/sysy-make-template'
+mkdir -p /tmp/tmpslth5cdi/
+flex  -o /tmp/tmpslth5cdi/sysy.lex.cpp /workspace/compiler_studying/sysy-make-template/src/sysy.l
+mkdir -p /tmp/tmpslth5cdi/
+bison -d -o /tmp/tmpslth5cdi/sysy.tab.cpp /workspace/compiler_studying/sysy-make-template/src/sysy.y
+mkdir -p /tmp/tmpslth5cdi/
+clang++ -I/workspace/compiler_studying/sysy-make-template/src -I/tmp/tmpslth5cdi -MMD -MP -Wall -Wno-register -std=c++17 -O2 -I/opt/include -c /tmp/tmpslth5cdi/sysy.lex.cpp -o /tmp/tmpslth5cdi/sysy.lex.cpp.o
+In file included from /workspace/compiler_studying/sysy-make-template/src/sysy.l:14:
+In file included from /workspace/compiler_studying/sysy-make-template/src/sysy.y:4:
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:526:9: warning: 'Calc' overrides a member function but is not marked 'override' [-Winconsistent-missing-override]
+  526 |     int Calc() const {
+      |         ^
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:163:17: note: overridden virtual function is here
+  163 |     virtual int Calc() const { //因为加减和乘除都会用，在编译期求值
+      |                 ^
+1 warning generated.
+mkdir -p /tmp/tmpslth5cdi/
+clang++ -I/workspace/compiler_studying/sysy-make-template/src -I/tmp/tmpslth5cdi -MMD -MP -Wall -Wno-register -std=c++17 -O2 -I/opt/include -c /tmp/tmpslth5cdi/sysy.tab.cpp -o /tmp/tmpslth5cdi/sysy.tab.cpp.o
+In file included from /workspace/compiler_studying/sysy-make-template/src/sysy.y:10:
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:526:9: warning: 'Calc' overrides a member function but is not marked 'override' [-Winconsistent-missing-override]
+  526 |     int Calc() const {
+      |         ^
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:163:17: note: overridden virtual function is here
+  163 |     virtual int Calc() const { //因为加减和乘除都会用，在编译期求值
+      |                 ^
+/workspace/compiler_studying/sysy-make-template/src/sysy.y:133:18: warning: unqualified call to 'std::move' [-Wunqualified-std-cast-call]
+  133 |   node->params = move (params->params);//move把列表内容转移给函数节点，当前动作结束后，临时列表节点销毁。
+      |                  ^
+      |                  std::
+/workspace/compiler_studying/sysy-make-template/src/sysy.y:158:17: warning: unqualified call to 'std::move' [-Wunqualified-std-cast-call]
+  158 |   node->params= move(params->params);
+      |                 ^
+      |                 std::
+/workspace/compiler_studying/sysy-make-template/src/sysy.y:367:16: warning: unqualified call to 'std::move' [-Wunqualified-std-cast-call]
+  367 |   node->args = move(args->args);
+      |                ^
+      |                std::
+4 warnings generated.
+mkdir -p /tmp/tmpslth5cdi/
+clang++ -I/workspace/compiler_studying/sysy-make-template/src -I/tmp/tmpslth5cdi -MMD -MP -Wall -Wno-register -std=c++17 -O2 -I/opt/include -c /workspace/compiler_studying/sysy-make-template/src/main.cpp -o /tmp/tmpslth5cdi/main.cpp.o
+In file included from /workspace/compiler_studying/sysy-make-template/src/main.cpp:6:
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:526:9: warning: 'Calc' overrides a member function but is not marked 'override' [-Winconsistent-missing-override]
+  526 |     int Calc() const {
+      |         ^
+/workspace/compiler_studying/sysy-make-template/src/../AST/BaseAst.h:163:17: note: overridden virtual function is here
+  163 |     virtual int Calc() const { //因为加减和乘除都会用，在编译期求值
+      |                 ^
+/workspace/compiler_studying/sysy-make-template/src/main.cpp:489:31: warning: '&&' within '||' [-Wlogical-op-parentheses]
+  489 |   if (string(mode) != "-koopa"&& string(mode) != "-riscv" || string(argv[3]) != "-o") {
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~
+/workspace/compiler_studying/sysy-make-template/src/main.cpp:489:31: note: place parentheses around the '&&' expression to silence this warning
+  489 |   if (string(mode) != "-koopa"&& string(mode) != "-riscv" || string(argv[3]) != "-o") {
+      |                               ^
+      |       (                                                  )
+2 warnings generated.
+clang++ /tmp/tmpslth5cdi/sysy.lex.cpp.o /tmp/tmpslth5cdi/sysy.tab.cpp.o /tmp/tmpslth5cdi/main.cpp.o -L/opt/lib/native -lkoopa -lpthread -ldl -o /tmp/tmpslth5cdi/compiler
+make: Leaving directory '/workspace/compiler_studying/sysy-make-template'
+running test "00_int_func" ... PASSED
+running test "01_void_func" ... PASSED
+running test "02_params" ... PASSED
+running test "03_more_params" ... PASSED
+running test "04_param_name" ... PASSED
+running test "05_func_name" ... PASSED
+running test "06_complex_call" ... PASSED
+running test "07_recursion" ... PASSED
+running test "08_lib_funcs" ... PASSED
+running test "09_globals" ... PASSED
+running test "10_complex" ... PASSED
+running test "11_short_circuit" ... PASSED
+PASSED (12/12)

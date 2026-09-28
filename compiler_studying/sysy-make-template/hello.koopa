@@ -1,5 +1,0 @@
-fun @main(): i32 {
-%enrty:
- ret 42
-}
-

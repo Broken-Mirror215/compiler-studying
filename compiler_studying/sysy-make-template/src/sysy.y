@@ -2,6 +2,7 @@
   #include <memory>
   #include <string>
   #include "../AST/BaseAst.h" //必须要放在这里？
+  #include <utility>
 }
 
 %{
@@ -49,7 +50,7 @@ using namespace std;
 
 // 非终结符的类型定义
 //ds v4 flash 3.1
-%type <ast_val> FuncDef FuncType Block Stmt  Number 
+%type <ast_val> FuncDef  Block Stmt  Number 
 %type <ast_val>Exp PrimaryExp UnaryExp MulExp AddExp RelExp EqExp LAndExp LOrExp
 %type <int_val> UnaryOp MulOp AddOp
 %type <ast_val> BlockStmtList BlockStmt
@@ -58,7 +59,10 @@ using namespace std;
 %type <ast_val>VarDecl VarDefList VarDef InitVal
 %type <ast_val>OtherStmt MatchedStmt UnmatchedStmt 
 %type <ast_val> Program CompUnit FuncFParams FuncRParams
-%type <str_val>FuncFParam
+%type <ast_val>FuncFParam
+%type <ast_val>CompUnitItem
+%type <ast_val>InitValList ConstInitValList
+%type <ast_val>ArrayDims
 %% 
 
 //------------------------------------------------------------------------上面是配置和声明
@@ -76,17 +80,28 @@ Program
 ;
 //lab 8.1 这部分我的理解是递归，找到所有的函数定义
 CompUnit  //这是整个编译单元，目前只有一个函数
-  : FuncDef {
+: CompUnitItem {
     auto node = new CompUnitAst();
-    node->funcs.push_back(unique_ptr<BaseAst>($1));
+    node->items.push_back(unique_ptr<BaseAst>($1));
     $$ = node;
 }
-| CompUnit FuncDef {
-  auto node= static_cast<CompUnitAst*>($1);
-  node->funcs.push_back(unique_ptr<BaseAst>($2));
+| CompUnit CompUnitItem {
+  auto node = static_cast<CompUnitAst*> ($1);
+  node->items.push_back(unique_ptr<BaseAst>($2));
   $$ = node;
 }
 ;
+
+CompUnitItem 
+:FuncDef {
+  $$ = $1;
+}
+| ConstDecl {
+  $$ = $1;
+}
+|VarDecl {
+  $$ = $1;
+}
 
 // FuncDef ::= FuncType IDENT '(' ')' Block;
 // 我们这里可以直接写 '(' 和 ')', 因为之前在 lexer 里已经处理了单个字符的情况
@@ -101,55 +116,80 @@ CompUnit  //这是整个编译单元，目前只有一个函数
 
 //lab 8.1
 FuncDef 
-: FuncType IDENT '(' ')' Block {
+: INT IDENT '(' ')' Block {
   auto ast=new FuncDefAst();
-  ast->func_type=unique_ptr<BaseAst>($1);
+  ast->func_type=unique_ptr<BaseAst>(new FuncTypeAst());
   ast->ident=*unique_ptr<string>($2);
   ast->block=unique_ptr<BaseAst>($5);
   //下面这个呢？
   $$ =ast; 
 } 
-| FuncType IDENT  '(' FuncFParams')' Block {
-  auto ast = new FuncDefAst();
-  ast->func_type = unique_ptr<BaseAst>($1);
-  ast->ident = *unique_ptr<string>($2);
+| INT IDENT  '(' FuncFParams')' Block {
+  auto node = new FuncDefAst();
+  node->func_type = unique_ptr<BaseAst>(new FuncTypeAst());
+  node->ident = *unique_ptr<string>($2);
   //形参列表就是个中转站，名字取走后就地销毁
   auto params = unique_ptr<FuncFParamsAst>(static_cast<FuncFParamsAst*>($4));
-  ast->params = move (params->params);//搬入形参名字？
-  ast->block = unique_ptr<BaseAst>($6);
-  $$ = ast;
-}
-;
-
-
-//lab8.1
-FuncType
-: INT {
-  $$ =new FuncTypeAst();
-}
-| VOID {
-  auto node = new FuncTypeAst();
-  node->is_void=true;
+  node->params = move (params->params);//move把列表内容转移给函数节点，当前动作结束后，临时列表节点销毁。
+  node->block = unique_ptr<BaseAst>($6);
   $$ = node;
 }
+| VOID IDENT '(' ')' Block {
+  auto node =new FuncDefAst();
+
+  auto type = new FuncTypeAst();
+  type->is_void = true;
+  node->func_type =unique_ptr<BaseAst>(type);
+
+  node->ident =*unique_ptr<string>($2);
+  node->block = unique_ptr<BaseAst>($5);
+  $$ = node;
+}
+| VOID IDENT '(' FuncFParams ')' Block {
+  auto node =new FuncDefAst();
+
+  auto type =new FuncTypeAst();
+  type->is_void = true;
+  node->func_type = unique_ptr<BaseAst>(type);
+
+  node->ident = *unique_ptr<string>($2);
+
+  auto params = unique_ptr<FuncFParamsAst>(static_cast<FuncFParamsAst*>($4));
+  node->params= move(params->params);
+  node->block = unique_ptr<BaseAst>($6);
+  $$ = node;
+
+}
 ;
+
 
 //lab 8.1 形参只要名字，所以函数只要返回一个字符串指针?
 FuncFParam
 :INT IDENT {
-  $$ = $2;
+  auto node =new FuncFParamAst();
+  node->ident = *unique_ptr<string>($2);
+  $$ = node;
+}
+| INT IDENT '[' ']' ArrayDims {
+  auto node = new FuncFParamAst();
+  node->ident = *unique_ptr<string>($2);
+  node->is_array = true;
+
+  auto dims = unique_ptr<ArrayDimsAst>(static_cast<ArrayDimsAst*>($5));
+  node->array_dims = std::move(dims->dims);
+  $$ = node;
 }
 ;
 //lab 8.1
 FuncFParams
 :FuncFParam {
   auto node = new FuncFParamsAst();
-  node->params.push_back(*unique_ptr<string>($1));
+  node->params.emplace_back(static_cast<FuncFParamAst*>($1));
   $$ = node;
 }
 | FuncFParams ',' FuncFParam {
   auto node = static_cast<FuncFParamsAst*> ($1);
-  node->params.push_back(*unique_ptr<string>($3));
+  node->params.emplace_back(static_cast<FuncFParamAst*>($3));
   $$ = node; 
 }
 ;
@@ -251,11 +291,8 @@ OtherStmt
 }
 | LVal '=' Exp ';' {
   auto node = new AssignStmtAst();
-  unique_ptr<LValAst> lval (
-      static_cast<LValAst*> ($1)
-  );
-  node->ident = lval->ident;
-  node->expr = unique_ptr<BaseAst>($3);
+  node->target.reset(static_cast<LValAst*>($1));
+  node->expr.reset($3);
   $$ = node;
 }
 | Block{
@@ -332,7 +369,7 @@ UnaryExp //一元表达式喵 +a. -a,!a这些都是喵！
 }
 ;
 
-//lab 8.1 这个部分是实参？
+//lab 8.1 实参要存Ast,形参只要保存名字。 如果实参是两个表达式的话，需要保存各自的表达式树。
 FuncRParams
 :Exp {
   auto node = new FuncRParamsAst();
@@ -510,35 +547,75 @@ VarDefList //这里就是变量列表 int a=3,b=4
 }
 ;
 
+
+
+ArrayDims 
+:%empty {
+  $$ = new ArrayDimsAst();
+}
+|ArrayDims '[' ConstExp ']' {
+  auto node =static_cast<ArrayDimsAst*>($1);
+  node->dims.emplace_back($3);
+  $$ = node;
+}
+;
+
 ConstDef //这里写的是常量赋值 const int a =3 中的 a =3 
-:IDENT '=' ConstInitVal {
+:IDENT ArrayDims '=' ConstInitVal {
   auto node = new ConstDefAst();
-  unique_ptr<string> name($1);
-  node->ident =*name;
-  node->init=unique_ptr<BaseAst>($3);
+  node->ident = *unique_ptr<string>($1);
 
-  $$=node;
-}
-
-VarDef  //这里就是一个变量 a
-:IDENT {
-  auto node =new VarDefAst();
-  unique_ptr<string> name ($1);
-  node->ident=*name;
-  $$=node;
-}
-| IDENT '=' InitVal { //这里是变量赋值 int a = 3里面的 a = 3
-  auto node =new VarDefAst();
-  unique_ptr<string> name ($1);
-  node->ident=*name;
-  node->init=unique_ptr<BaseAst>($3);
+  unique_ptr<ArrayDimsAst> dims(static_cast<ArrayDimsAst*>($2));
+  node->array_dims = std::move(dims->dims);
+  node->init.reset($4);
   $$=node;
 }
 ;
 
+
+VarDef  //这里就是一个变量 a
+:IDENT ArrayDims {
+  auto node =new VarDefAst();
+  node->ident = *unique_ptr<string>($1);
+
+  unique_ptr<ArrayDimsAst> dims(static_cast<ArrayDimsAst*>($2));
+  node->array_dims = std::move(dims->dims);
+  $$ = node;
+}
+| IDENT ArrayDims '=' InitVal {
+  auto node = new VarDefAst();
+  node->ident = *unique_ptr<string>($1);
+
+  unique_ptr<ArrayDimsAst> dims ( static_cast<ArrayDimsAst*> ($2));
+  node->array_dims = std::move(dims->dims);
+  node->init.reset($4);
+  $$ = node;
+}
+;
+
+
 ConstInitVal //这是常量的初始值 const int a = 1 + 2里面的 1 + 2
 :ConstExp {
   $$=$1;//
+}
+| '{' '}' {
+  $$ = new ArrayInitAst();
+}
+| '{' ConstInitValList '}' {
+  $$ = $2;
+}
+;
+
+ConstInitValList
+: ConstInitVal {
+  auto node = new ArrayInitAst();
+  node->elems.emplace_back($1);
+  $$ = node;
+}
+| ConstInitValList ',' ConstInitVal {
+  auto node = static_cast<ArrayInitAst*>($1);
+  node->elems.emplace_back($3);
+  $$ = node;
 }
 ;
 
@@ -546,7 +623,25 @@ InitVal
 :Exp {
   $$=$1;
 }
+| '{' '}' {
+  $$ = new ArrayInitAst();
+}
+| '{' InitValList '}' {
+  $$ = $2;
+}
 ;
+
+InitValList
+: InitVal {
+  auto node = new ArrayInitAst();
+  node->elems.emplace_back($1);
+  $$ = node;
+}
+|InitValList ',' InitVal {
+  auto node = static_cast<ArrayInitAst*>($1);
+  node->elems.emplace_back($3);
+  $$ = node;
+}
 
 ConstExp //这是常量的表达式 用 1 + 2,后续在编译期计算结果
 :Exp{
@@ -557,10 +652,15 @@ ConstExp //这是常量的表达式 用 1 + 2,后续在编译期计算结果
 LVal //????这是最没搞懂的，是名字的使用 a = 3 就是左边的 a 或者就是 return a 里面的 a?
 :IDENT {  
   auto node =new LValAst();
-  unique_ptr<string> name($1);
-  node->ident = *name;
+  node->ident = *unique_ptr<string>($1);
   $$ = node;
 }
+| LVal '[' Exp ']' {
+  auto node =static_cast<LValAst*>($1);
+  node->indices.emplace_back($3);
+  $$ = node;
+}
+;
 
 
 

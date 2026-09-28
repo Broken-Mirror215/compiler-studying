@@ -1,0 +1,56 @@
+[
+  {
+    "mode": "koopa",
+    "suite": "custom",
+    "exit_code": 0,
+    "success": true,
+    "passed": 19,
+    "total": 19,
+    "log": "koopa-custom.txt"
+  },
+  {
+    "mode": "koopa",
+    "suite": "lv8",
+    "exit_code": 0,
+    "success": true,
+    "passed": 12,
+    "total": 12,
+    "log": "koopa-lv8.txt"
+  },
+  {
+    "mode": "koopa",
+    "suite": "lv9",
+    "exit_code": 0,
+    "success": true,
+    "passed": 22,
+    "total": 22,
+    "log": "koopa-lv9.txt"
+  },
+  {
+    "mode": "riscv",
+    "suite": "custom",
+    "exit_code": 0,
+    "success": true,
+    "passed": 19,
+    "total": 19,
+    "log": "riscv-custom.txt"
+  },
+  {
+    "mode": "riscv",
+    "suite": "lv8",
+    "exit_code": 0,
+    "success": true,
+    "passed": 12,
+    "total": 12,
+    "log": "riscv-lv8.txt"
+  },
+  {
+    "mode": "riscv",
+    "suite": "lv9",
+    "exit_code": 0,
+    "success": true,
+    "passed": 22,
+    "total": 22,
+    "log": "riscv-lv9.txt"
+  }
+]
