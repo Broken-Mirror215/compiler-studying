@@ -5,6 +5,7 @@
 实际编译器位于 [compiler_studying/sysy-make-template](compiler_studying/sysy-make-template/README.md)。运行 `make`、`autotest` 时使用该目录。
 
 - [构建、运行与测试](compiler_studying/sysy-make-template/README.md)
+- [前端、中端、后端与代码职责](compiler_studying/sysy-make-template/docs/compiler-pipeline.md)
 - [实验复盘目录](compiler_studying/sysy-make-template/docs/README.md)
 - [自定义回归测试](compiler_studying/sysy-make-template/tests/README.md)
 - [最终验证材料](compiler_studying/sysy-make-template/docs/validation/README.md)
