@@ -8,6 +8,8 @@
 
 Lab9 最终功能验证在两种模式下均通过完整 Lv9 22/22、Lv8 回归 12/12 和数组参数专项 4/4。仓库整理后的复现结果见[测试报告](docs/test-report.md)。
 
+Lv9+ 的寄存器缓存、常量下标地址优化及性能测量见[实践复盘](docs/labs/Lab9+-寄存器缓存与性能测试复盘.md)。
+
 ## 环境与构建
 
 使用[课程开发环境](https://pku-minic.github.io/online-doc/#/misc-app-ref/environment)，其中提供 `clang++`、`flex`、`bison`、libkoopa、`koopac`、RISC-V 工具链和 `autotest`。测试脚本需要 Python 3。
@@ -25,9 +27,10 @@ make -j2
 ```bash
 ./build/compiler -koopa examples/return42.c -o build/return42.koopa
 ./build/compiler -riscv examples/return42.c -o build/return42.s
+./build/compiler -perf examples/return42.c -o build/return42-perf.s
 ```
 
-编译器接受 `模式 输入文件 -o 输出文件`。`-koopa` 输出 IR，`-riscv` 输出汇编；生成汇编后的链接和执行由课程测试工具完成。
+编译器接受 `模式 输入文件 -o 输出文件`。`-koopa` 输出 IR，`-riscv` 和 `-perf` 输出汇编；`-perf` 供课程性能测试使用。生成汇编后的链接和执行由课程测试工具完成。
 
 ## 运行测试
 
@@ -40,6 +43,9 @@ python3 scripts/test.py
 # 只运行一种模式或一个范围
 python3 scripts/test.py --mode koopa --suite custom
 python3 scripts/test.py --mode riscv --suite lv9
+
+# 课程性能测试
+autotest -perf -s perf .
 ```
 
 `--mode` 可选 `both`、`koopa`、`riscv`；`--suite` 可选 `all`、`custom`、`lv8`、`lv9`。脚本从自身位置定位项目，可以从其他工作目录调用。
@@ -69,6 +75,6 @@ build/              本地构建产物与临时测试日志，不提交
 
 ## 当前边界
 
-这是以课程合法输入和实验测试为范围的学习实现。常量数组元素的编译期求值、完整语义错误恢复及运行时数组越界检查尚未实现；寄存器分配和进一步性能优化属于后续学习内容。
+这是以课程合法输入和实验测试为范围的学习实现。常量数组元素的编译期求值、完整语义错误恢复及运行时数组越界检查尚未实现；当前已有基本块内的寄存器缓存与常量数组下标化简，全局寄存器分配和进一步性能优化属于后续学习内容。
 
 项目沿用课程 Makefile 模板。Git 仓库根目录在上两级 `PKU_complier/`，编译器目录不再包含独立 `.git`。

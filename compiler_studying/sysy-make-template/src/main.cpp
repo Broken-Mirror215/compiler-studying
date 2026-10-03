@@ -195,6 +195,88 @@ void LoadValue(koopa_raw_value_t value,const string &reg,const StackFrame & fram
     }
 }
 
+
+//开始学习寄存器分配 基本块内的寄存器缓存
+class LocalRegCache {
+
+  const StackFrame &frame_;
+  koopa_raw_value_t values_[3]= {};
+  int next_victim_ = 0;
+
+  static const char * Reg(int i) {
+    static const char * names[] = {"t3","t4","t5"};
+    return names[i];
+  }
+
+  void Spill(int i) {
+      if (!values_[i]) return;
+      StoreStack(Reg(i),frame_.offsets.at(values_[i]));
+      values_[i] = nullptr;
+  }
+public:
+
+  explicit LocalRegCache(const StackFrame& frame) : frame_(frame) {}
+
+  void Load(koopa_raw_value_t value, const string & dst) const {
+      for (int i=0;i<3;i++) {
+        if (values_[i] == value) {
+          if (dst != Reg(i)) {
+            cout << " mv " << dst << ", " << Reg(i) << "\n";
+          }
+          return;
+        }
+      }
+    LoadValue(value,dst,frame_);
+  }
+
+  void Remember(koopa_raw_value_t value, const string & src) {
+    int i = 0;
+    while (i < 3 && values_[i]) i++;
+
+    if (i==3) {
+      i = next_victim_;
+      Spill(i);
+      next_victim_ = (i+1)%3;
+    }
+
+    if (src != Reg(i)) {
+      cout << " mv " << Reg(i) << ", " << src << "\n";
+    }
+    values_[i] = value;
+  }
+
+  void Flush() {
+    for (int i= 0 ; i < 3;i ++) {
+      Spill(i);
+    }
+    next_victim_ = 0;
+  }
+
+};
+
+void AddIndexToT0(koopa_raw_value_t index, int stride, const LocalRegCache& cache) {
+  if (index->kind.tag == KOOPA_RVT_INTEGER) {
+    long long bytes = 1ll * index->kind.data.integer.value * stride;
+
+    if (bytes >= -2048 && bytes <=2047) {
+      if (bytes != 0) {
+        cout << " addi t0, t0, " << bytes <<"\n";
+      }
+      return;
+    }
+  }
+
+  cache.Load(index, "t1");
+  cout << " li t2, " << stride << "\n";
+  cout << " mul t1, t1, t2\n";
+  cout << " add t0, t0, t1\n";
+  //addi的立即数是有符号12位，所以这里检查-2048~2047 超出范围就走原路径。
+}
+
+
+
+
+
 string BlockLabel (const string & func_name,koopa_raw_basic_block_t bb) {
   assert(bb->name);
   
@@ -274,6 +356,7 @@ void GenRiscV(const koopa_raw_program_t &raw){
     
     for (size_t j=0;j<func->bbs.len;j++){ //进入这个函数的基本块
       auto bb=reinterpret_cast<koopa_raw_basic_block_t>(func->bbs.buffer[j]);
+      LocalRegCache cache(frame);
       assert(bb->insts.kind==KOOPA_RSIK_VALUE);
       cout << BlockLabel(name,bb) << ":\n";
      
@@ -287,8 +370,8 @@ void GenRiscV(const koopa_raw_program_t &raw){
             const auto & binary=inst->kind.data.binary; //这个是二元运算的数据
             
             // 从独立的结果寄存器或立即数加载两个操作数。
-            LoadValue(binary.lhs,"t0",frame);
-            LoadValue(binary.rhs,"t1",frame);
+            cache.Load(binary.lhs,"t0");
+            cache.Load(binary.rhs,"t1");
             string dest ="t0";
             
 
@@ -344,22 +427,23 @@ void GenRiscV(const koopa_raw_program_t &raw){
               cerr << "未支持这个二元运算\n";
               return;
             }
-            StoreStack(dest,frame.offsets.at(inst));//xxx.at是记录这个元素的在栈内的偏移量。
+            cache.Remember(inst,dest);
             break;
           }
           case KOOPA_RVT_CALL : {
             const auto & call= inst->kind.data.call;
             assert(call.args.kind == KOOPA_RSIK_VALUE);
+            cache.Flush();
 
             //把实参放到参数寄存器或者栈
             for (size_t i = 0; i<call.args.len;i++) {
               auto arg = reinterpret_cast<koopa_raw_value_t> ( call.args.buffer[i]);
               
               if (i < 8) {
-                LoadValue(arg,"a" + to_string(i),frame);
+                cache.Load(arg,"a" + to_string(i));
               }
               else {
-                LoadValue(arg,"t0", frame);
+                cache.Load(arg,"t0");
                 int offset = static_cast<int>(i-8)*4;
                 StoreStack("t0",offset);
               }
@@ -378,7 +462,7 @@ void GenRiscV(const koopa_raw_program_t &raw){
           case KOOPA_RVT_RETURN : {
             auto ret_value =inst->kind.data.ret.value; //return 的数据
             if (ret_value) {
-              LoadValue(ret_value,"a0",frame);
+              cache.Load(ret_value,"a0");
             }
 
             if (frame.has_call) {
@@ -403,7 +487,7 @@ void GenRiscV(const koopa_raw_program_t &raw){
           }
           case KOOPA_RVT_STORE: {
             const auto & store =inst->kind.data.store;
-            LoadValue(store.value,"t0",frame);
+            cache.Load(store.value,"t0");
             LoadAddress(store.dest,"t1",frame);
             cout << " sw t0, 0(t1)\n";            
             break;
@@ -411,7 +495,8 @@ void GenRiscV(const koopa_raw_program_t &raw){
           case KOOPA_RVT_BRANCH:{
             const auto & branch = inst->kind.data.branch;
 
-            LoadValue(branch.cond,"t0",frame);
+            cache.Load(branch.cond,"t0");
+            cache.Flush();
             cout << " bnez t0, " << BlockLabel(name,branch.true_bb) << "\n";
 
             cout << " j " << BlockLabel(name,branch.false_bb ) << "\n";
@@ -419,6 +504,7 @@ void GenRiscV(const koopa_raw_program_t &raw){
           }
           case KOOPA_RVT_JUMP :{
             const auto & jump =inst->kind.data.jump;
+            cache.Flush();
             cout << " j " << BlockLabel(name,jump.target) << "\n";
             break;
           }
@@ -427,13 +513,9 @@ void GenRiscV(const koopa_raw_program_t &raw){
             auto array_ty = gep.src->ty->data.pointer.base;
             assert(array_ty->tag == KOOPA_RTT_ARRAY);
             LoadAddress(gep.src,"t0",frame);
-            LoadValue(gep.index,"t1",frame);
-            cout << " li t2, " << TypeSize(array_ty->data.array.base) << "\n";
-            cout << " mul t1, t1, t2\n";
-            cout << " add t0, t0, t1\n";
+            AddIndexToT0(gep.index,TypeSize(array_ty->data.array.base),cache);
             StoreStack("t0",frame.offsets.at(inst));
             break;
-            
           }
           case KOOPA_RVT_GET_PTR :
           {
@@ -444,16 +526,8 @@ void GenRiscV(const koopa_raw_program_t &raw){
             //t0源指针
             LoadAddress(gp.src,"t0",frame);
 
-            //t1下标
-            LoadValue(gp.index,"t1",frame);
-
             //字节偏移 = 下标 x 指向对象大小
-            cout << " li t2, " << TypeSize(pointee_ty) << "\n";
-            cout << " mul t1, t1, t2\n";
-
-            //新地址 = 源地址 + 字节偏移
-            cout << " add t0, t0, t1\n";
-
+            AddIndexToT0(gp.index,TypeSize(pointee_ty),cache);
             StoreStack("t0",frame.offsets.at(inst));
             break;
           }
@@ -462,7 +536,6 @@ void GenRiscV(const koopa_raw_program_t &raw){
             return;
         }
       }
-      
     }
   }
 }
@@ -470,12 +543,21 @@ void GenRiscV(const koopa_raw_program_t &raw){
 
 
 int main(int argc,const char* argv[]){
+  const char* usage = "用法: compiler [-koopa|-riscv|-perf] 输入文件 -o 输出文件\n";
+  if (argc != 5) {
+    cerr << usage;
+    return 1;
+  }
 
-
-  assert(argc==5);
-  auto mode=argv[1];
+  const string mode=argv[1];
   auto input=argv[2];
   auto output=argv[4];
+
+  if ((mode != "-koopa" && mode != "-riscv" && mode != "-perf") ||
+      string(argv[3]) != "-o") {
+    cerr << usage;
+    return 1;
+  }
 
   yyin=fopen(input,"r");
   assert(yyin);
@@ -484,13 +566,6 @@ int main(int argc,const char* argv[]){
   unique_ptr<BaseAst> ast;
   auto ret=yyparse(ast);//解析器按照我的bison语法去建树了。
   assert(!ret);
-
-
-  if (string(mode) != "-koopa"&& string(mode) != "-riscv" || string(argv[3]) != "-o") {
-      cerr << "用法: compiler -koopa 输入文件 -o 输出文件\n";
-      return 1;
-  }
-
   
   //1.把dump 输出的koopa ir 收集到字符串流
   stringstream ir_stream;
@@ -530,7 +605,7 @@ int main(int argc,const char* argv[]){
     return 1;
   }
 
-  if (string(mode)=="-koopa"){
+  if (mode=="-koopa"){
     cout<<ir;
   }
   else
